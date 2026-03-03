@@ -3,8 +3,7 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-from sklearn.discriminant_analysis import StandardScaler
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
@@ -28,8 +27,8 @@ def scale_features(
     std_scaler = StandardScaler()
     rob_scaler = RobustScaler()
 
-    X_std = pd.DataFrame(std_scaler.fit_transform(X), columns=features)
-    X_rob = pd.DataFrame(rob_scaler.fit_transform(X), columns=features)
+    X_std = pd.DataFrame(std_scaler.fit_transform(X), columns=features, index=data.index)
+    X_rob = pd.DataFrame(rob_scaler.fit_transform(X), columns=features, index=data.index)
 
     # Show visualization of raw vs scaled features
     if show_charts:

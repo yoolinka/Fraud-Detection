@@ -4,7 +4,7 @@ DATA_PATH = "/Users/yuliia/Documents/Fraud-Detection/parquet/"
 
 FRAUD_IDS = [
     11968000, 11970409, 11726701, 14827913,
-    12411311, 11098795, 12412748, 11812494, 12396334
+    12411311, 12412748, 11812494, 12396334
 ]
 
 FEATURES = [
@@ -43,7 +43,9 @@ SKEWED = [
 ]
 
 
-def load_data():
+def load_data(activity_state = 1):
     df = pd.read_parquet(DATA_PATH + "processed_transactions.parquet", engine="pyarrow")
     client_data = pd.read_parquet(DATA_PATH + "client_level_features.parquet", engine="pyarrow")
+    client_data = client_data[client_data['num_of_trn'] > activity_state]
+    client_data = client_data.set_index('person_id')
     return df, client_data
