@@ -17,16 +17,42 @@ def scale_features(
         features = FEATURES,
         skewed = SKEWED,
         show_charts = False,
+        fit_data = None,
 ):
+    """
+    Scale features (log1p for skewed, then Standard or Robust scaler).
+    If fit_data is None: fit and transform on data (returns one DataFrame).
+    If fit_data is not None: fit on fit_data, transform data; returns (scaled_fit_data, scaled_data).
+    """
     X = data[features]
     X = X.fillna(X.median())
-    
     for col in skewed:
         X[col] = np.log1p(X[col])
 
+    if fit_data is not None:
+        X_fit = fit_data[features].fillna(fit_data[features].median()).copy()
+        for col in skewed:
+            X_fit[col] = np.log1p(X_fit[col])
+        std_scaler = StandardScaler()
+        rob_scaler = RobustScaler()
+        std_scaler.fit(X_fit)
+        rob_scaler.fit(X_fit)
+        X_std_fit = std_scaler.transform(X_fit)
+        X_rob_fit = rob_scaler.transform(X_fit)
+        X_std = std_scaler.transform(X)
+        X_rob = rob_scaler.transform(X)
+        X_std = pd.DataFrame(X_std, columns=features, index=data.index)
+        X_rob = pd.DataFrame(X_rob, columns=features, index=data.index)
+        X_std_fit = pd.DataFrame(X_std_fit, columns=features, index=fit_data.index)
+        X_rob_fit = pd.DataFrame(X_rob_fit, columns=features, index=fit_data.index)
+        if scaler_type == "standard":
+            return X_std_fit, X_std
+        elif scaler_type == "robust":
+            return X_rob_fit, X_rob
+        raise ValueError("SORRYYY PLS PAST scaler_type value 'standard' or 'robust'")
+
     std_scaler = StandardScaler()
     rob_scaler = RobustScaler()
-
     X_std = pd.DataFrame(std_scaler.fit_transform(X), columns=features, index=data.index)
     X_rob = pd.DataFrame(rob_scaler.fit_transform(X), columns=features, index=data.index)
 
