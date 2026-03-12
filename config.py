@@ -27,7 +27,7 @@ FRAUD_IDS = [
     13337997, 
     13239788,
     12614443,
-    12646735,  # hz
+    12646735,
     13119461,
     13859241,
     13119415,
@@ -37,14 +37,14 @@ FRAUD_IDS = [
 ]
 
 FEATURES = [
-    'num_of_trn', 
-    'days_visits', 
+    # 'num_of_trn', 
+    # 'days_visits', 
     'gross_amount_mean', 
-    'gross_amount_sum',
-    'bonuses_accum_sum',
-    'bonuses_used_sum',
-    'num_of_waiters',
-    'gross_amount_max',
+    # 'gross_amount_sum',
+    # 'bonuses_accum_sum',
+    # 'bonuses_used_sum',
+    # 'num_of_waiters',
+    # 'gross_amount_max',
     'first_last_trn_diff',
     'first_second_trn_diff',
     'first_third_trn_diff',
@@ -53,30 +53,31 @@ FEATURES = [
     'share_top_waiter',
     'share_bonus_trn',
     'share_bonus_after_first',
-    'num_of_places',
+    # 'num_of_places',
     'share_top_places'
 ]
 
 SKEWED = [
-    'num_of_trn',
-    'days_visits',
+    # 'num_of_trn',
+    # 'days_visits',
     'gross_amount_mean',
-    'gross_amount_sum',
-    'bonuses_accum_sum',
-    'bonuses_used_sum',
-    'num_of_waiters',
-    'gross_amount_max',
+    # 'gross_amount_sum',
+    # 'bonuses_accum_sum',
+    # 'bonuses_used_sum',
+    # 'num_of_waiters',
+    # 'gross_amount_max',
     'first_last_trn_diff',
     'first_second_trn_diff',
     'first_third_trn_diff',
     'time_between_trn_median',
     'trn_per_day',
-    'num_of_places'
+    # 'num_of_places'
 ]
 
-def load_data(activity_state = 1):
+def load_data(activity_state = 1, days_visits = 1):
     df = pd.read_parquet(DATA_PATH + "processed_transactions.parquet", engine="pyarrow")
     client_data = pd.read_parquet(DATA_PATH + "client_level_features.parquet", engine="pyarrow")
     client_data = client_data[client_data['num_of_trn'] > activity_state]
+    client_data = client_data[client_data['days_visits'] > 2]
     client_data = client_data.set_index('person_id')
     return df, client_data

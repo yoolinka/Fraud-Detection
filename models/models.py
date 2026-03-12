@@ -263,7 +263,8 @@ def _top_k_precision(
 
 
 def compare_models(
-    activity_state: int = 1,
+    activity_state: int = 2,
+    days_visits: int = 2,
     exclude_fraud_from_training: bool = True,
     compare_scalers: bool = False,
     plot_scores_path: Optional[str] = None,
