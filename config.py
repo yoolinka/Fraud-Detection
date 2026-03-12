@@ -3,8 +3,37 @@ import pandas as pd
 DATA_PATH = "/Users/yuliia/Documents/Fraud-Detection/parquet/"
 
 FRAUD_IDS = [
-    11968000, 11970409, 11726701, 14827913,
-    12411311, 12412748, 11812494, 12396334
+    11968000,
+    11970409,
+    11726701,
+    14827913,
+    12411311,
+    11098795,
+    12412748,
+    11812494,
+    12396334,
+    11699175,
+    10896313,
+    16376555,
+    16921722, 
+    16846666,
+    16794470,
+    16440373,
+    11766135,
+    13969910,
+    12234377,
+    12861171, 
+    13076915, 
+    13337997, 
+    13239788,
+    12614443,
+    12646735,  # hz
+    13119461,
+    13859241,
+    13119415,
+    3349318,
+    12830394,
+    12878021
 ]
 
 FEATURES = [
@@ -23,7 +52,9 @@ FEATURES = [
     'trn_per_day',
     'share_top_waiter',
     'share_bonus_trn',
-    'share_bonus_after_first'
+    'share_bonus_after_first',
+    'num_of_places',
+    'share_top_places'
 ]
 
 SKEWED = [
@@ -39,9 +70,9 @@ SKEWED = [
     'first_second_trn_diff',
     'first_third_trn_diff',
     'time_between_trn_median',
-    'trn_per_day'
+    'trn_per_day',
+    'num_of_places'
 ]
-
 
 def load_data(activity_state = 1):
     df = pd.read_parquet(DATA_PATH + "processed_transactions.parquet", engine="pyarrow")
