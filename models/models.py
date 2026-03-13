@@ -277,7 +277,7 @@ def compare_models(
     reports metrics for each (6 rows: 3 models x 2 scalers).
     If plot_scores_path is set, saves anomaly score distribution histograms (fraud vs non-fraud) to that file.
     """
-    df, client_data = load_data(activity_state=activity_state)
+    df, client_data = load_data(activity_state=activity_state, days_visits=days_visits)
     y_fraud = client_data["is_fraud"].astype(int).values
     n_fraud = y_fraud.sum()
     n_total = len(client_data)
@@ -410,7 +410,8 @@ def compare_models(
 
 
 def compare_real_vs_synthetic(
-    activity_state: int = 1,
+    activity_state: int = 2,
+    days_visits: int = 2,
     n_synthetic: int = 500,
     noise_scale: float = 0.1,
     random_state: int = 42,
@@ -421,7 +422,7 @@ def compare_real_vs_synthetic(
     run the same three models on both with training on non-fraud only.
     Returns (results_real, results_synthetic, client_data_real, client_data_synthetic).
     """
-    df, client_data = load_data(activity_state=activity_state)
+    df, client_data = load_data(activity_state=activity_state, days_visits=days_visits)
     client_data = client_data[client_data["num_of_trn"] > activity_state]
     if "is_fraud" not in client_data.columns:
         client_data["is_fraud"] = client_data.index.isin(FRAUD_IDS).astype(int)

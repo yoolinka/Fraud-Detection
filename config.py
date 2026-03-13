@@ -37,9 +37,9 @@ FRAUD_IDS = [
 ]
 
 FEATURES = [
-    # 'num_of_trn', 
-    # 'days_visits', 
-    'gross_amount_mean', 
+    # 'num_of_trn',
+    # 'days_visits',
+    'gross_amount_mean',
     # 'gross_amount_sum',
     # 'bonuses_accum_sum',
     # 'bonuses_used_sum',
@@ -51,10 +51,11 @@ FEATURES = [
     'time_between_trn_median',
     'trn_per_day',
     'share_top_waiter',
-    'share_bonus_trn',
-    'share_bonus_after_first',
+    # 'share_bonus_trn',
+    # 'share_bonus_after_first',
     # 'num_of_places',
-    'share_top_places'
+    'share_top_places',
+    'share_bonuses_used_top_waiter'
 ]
 
 SKEWED = [
@@ -78,6 +79,6 @@ def load_data(activity_state = 1, days_visits = 1):
     df = pd.read_parquet(DATA_PATH + "processed_transactions.parquet", engine="pyarrow")
     client_data = pd.read_parquet(DATA_PATH + "client_level_features.parquet", engine="pyarrow")
     client_data = client_data[client_data['num_of_trn'] > activity_state]
-    client_data = client_data[client_data['days_visits'] > 2]
+    client_data = client_data[client_data['days_visits'] > days_visits]
     client_data = client_data.set_index('person_id')
     return df, client_data
