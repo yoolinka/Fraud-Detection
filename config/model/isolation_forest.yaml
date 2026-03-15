@@ -1,0 +1,9 @@
+# Isolation Forest configuration
+
+method: "isolation_forest"
+contamination: 0.01
+scaler_type: "standard"
+
+n_estimators: 300
+random_state: 42
+

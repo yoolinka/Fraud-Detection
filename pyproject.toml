@@ -1,0 +1,44 @@
+[project]
+name = "fraud-detection"
+version = "0.1.0"
+description = "Fraud / anomaly detection pipeline with Isolation Forest, LOF, and One-Class SVM."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Pavlo Semchyshyn" }
+]
+
+dependencies = [
+  "pandas>=2.0.0",
+  "numpy>=1.24.0",
+  "scikit-learn>=1.3.0",
+  "pyarrow>=12.0.0",
+  "hydra-core>=1.3.0",
+  "omegaconf>=2.3.0",
+  # Optional / extra dependencies
+  "plotly>=5.14.0",
+  "shap>=0.42.0",
+  "networkx>=3.4.2",
+  "seaborn>=0.13.2",
+  "py2neo>=2021.2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ipykernel",
+  "ipython",
+  "jupyter",
+]
+
+[dependency-groups]
+dev = [
+  "ipykernel",
+  "ipython",
+  "jupyter",
+]
+
+[tool.uv]
+
+
+

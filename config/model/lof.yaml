@@ -1,0 +1,8 @@
+# Local Outlier Factor configuration
+
+method: "lof"
+contamination: 0.01
+scaler_type: "standard"
+
+n_neighbors: 50
+

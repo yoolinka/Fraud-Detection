@@ -1,0 +1,6 @@
+# All models configuration
+
+method: "all"
+contamination: 0.01
+scaler_type: "robust"
+

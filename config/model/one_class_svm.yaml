@@ -1,0 +1,9 @@
+# One-Class SVM configuration
+
+method: "one_class_svm"
+contamination: 0.01
+scaler_type: "standard"
+
+kernel: "rbf"
+gamma: "scale"
+

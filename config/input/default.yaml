@@ -1,0 +1,4 @@
+# Data configuration
+
+processed_path: "../processed_transactions.parquet"
+
