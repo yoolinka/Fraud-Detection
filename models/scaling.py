@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 
 sys.path.append(os.path.abspath(".."))
 from config import load_data, FEATURES, SKEWED
-df, client_data = load_data()
+df, client_data, waiter_week_data = load_data()
 
 def scale_features(
         data = client_data,

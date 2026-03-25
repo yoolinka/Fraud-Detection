@@ -104,7 +104,11 @@ PERCENTILE_FEATURES = [
     'num_of_places_prcnt'
 ]
 
-def load_data(activity_state = 1, days_visits = 1):
+def load_data(
+    activity_state = 1, 
+    days_visits = 1,
+    num_of_trn = 1,
+    place_num_of_waiters = 1):
     df = pd.read_parquet(DATA_PATH + "processed_transactions.parquet", engine="pyarrow")
     client_data = pd.read_parquet(DATA_PATH + "client_level_features.parquet", engine="pyarrow")
     client_data = client_data[client_data['num_of_trn'] > activity_state]
@@ -114,4 +118,9 @@ def load_data(activity_state = 1, days_visits = 1):
 
     for feat, prcnt_feat in zip(FEATURES_FOR_PERCENTILE, PERCENTILE_FEATURES):
         client_data[prcnt_feat] = client_data[feat].rank(pct=True)
-    return df, client_data
+    
+    waiter_week_data = pd.read_parquet(DATA_PATH + "waiter_week_features.parquet", engine="pyarrow")
+    waiter_week_data = waiter_week_data[waiter_week_data['num_of_trn'] > num_of_trn]
+    waiter_week_data = waiter_week_data[waiter_week_data['place_num_of_waiters'] > place_num_of_waiters]
+    waiter_week_data = waiter_week_data.set_index('waiter_week')
+    return df, client_data, waiter_week_data

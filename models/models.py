@@ -28,146 +28,8 @@ _scaling = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_scaling)
 scale_features = _scaling.scale_features
 
-
-def generate_synthetic_data(
-    client_data: pd.DataFrame,
-    n_synthetic: int = 500,
-    noise_scale: float = 0.1,
-    random_state: int = 42,
-) -> pd.DataFrame:
-    """
-    Generate synthetic fraud samples from real fraud: resample with replacement,
-    add Gaussian noise to numeric features, assign new person_id indices.
-    Returns a DataFrame with same structure as client_data: non-fraud rows +
-    synthetic fraud (is_fraud=1), index = person_id.
-    """
-    fraud_real = client_data[client_data["is_fraud"] == 1]
-    if len(fraud_real) == 0:
-        raise ValueError("No fraud rows in client_data; cannot generate synthetic fraud.")
-    synthetic = fraud_real.sample(n=min(n_synthetic, len(fraud_real)), replace=True, random_state=random_state).copy()
-    num_cols = synthetic.select_dtypes("number").columns.difference(["is_fraud"], sort=False)
-    if "person_id" in synthetic.columns:
-        num_cols = num_cols.difference(["person_id"], sort=False)
-    rng = np.random.default_rng(random_state)
-    noise = rng.normal(0, noise_scale, (len(synthetic), len(num_cols)))
-    synthetic.loc[:, num_cols] = synthetic[num_cols].values * (1 + noise)
-    start = int(client_data.index.max()) + 1
-    synthetic.index = np.arange(start, start + len(synthetic))
-    synthetic.index.name = client_data.index.name
-    synthetic["is_fraud"] = 1
-    non_fraud = client_data[client_data["is_fraud"] == 0]
-    non_fraud['synthetic'] = 0
-    synthetic['synthetic'] = 1
-    return pd.concat([non_fraud, synthetic], axis=0)
-
-
-def fit_and_evaluate(
-    X_fit: np.ndarray,
-    y_true_binary: np.ndarray,
-    fraud_ids: list,
-    index,
-    X_eval: Optional[np.ndarray] = None,
-    max_ocsvm_train: int = 4000,
-):
-    """
-    Fit each model on X_fit, predict on X_eval (or X_fit if X_eval is None).
-    y_true_binary: 1 for known fraud, 0 otherwise; length must match X_eval (or X_fit).
-    max_ocsvm_train: One-Class SVM is slow; if n_fit > this, fit OCSVM on a subsample (default 4000).
-    """
-    X_eval = X_eval if X_eval is not None else X_fit
-    n_fit, n_eval = len(X_fit), len(X_eval)
-    n_fraud = y_true_binary.sum()
-    top_k_list = [10, 20, 50, 100]
-    results = []
-
-    # --- Isolation Forest ---
-    contamination = 0.001
-    t0 = time.perf_counter()
-    iso = IsolationForest(
-        n_estimators=100,
-        contamination=contamination,
-        random_state=42,
-        n_jobs=-1,
-    )
-    iso.fit(X_fit)
-    pred_iso = iso.predict(X_eval)
-    # score_samples: lower = more anomalous; use negative so higher = more anomalous
-    scores_iso = -iso.score_samples(X_eval)
-    t_iso = time.perf_counter() - t0
-    n_anom_iso = (pred_iso == -1).sum()
-    hit_iso = _hit_rate(pred_iso, y_true_binary)
-    row_iso = {
-        "model": "Isolation Forest",
-        "n_anomalies": n_anom_iso,
-        "pct_flagged": 100 * n_anom_iso / n_eval,
-        "fraud_hit_rate": hit_iso,
-        "time_sec": round(t_iso, 3),
-    }
-    row_iso.update(_top_k_recall(scores_iso, y_true_binary, top_k_list))
-    row_iso.update(_top_k_precision(scores_iso, y_true_binary, top_k_list))
-    results.append(row_iso)
-
-    # --- One-Class SVM (subsample if large: RBF fit is O(n²)) ---
-    nu = 0.001
-    t0 = time.perf_counter()
-    rng = np.random.default_rng(42)
-    if n_fit > max_ocsvm_train:
-        idx = rng.choice(n_fit, size=max_ocsvm_train, replace=False)
-        X_fit_ocsvm = X_fit[idx]
-    else:
-        X_fit_ocsvm = X_fit
-    ocsvm = OneClassSVM(kernel="rbf", nu=nu, gamma="scale")
-    ocsvm.fit(X_fit_ocsvm)
-    pred_ocsvm = ocsvm.predict(X_eval)
-    # decision_function: negative = anomaly; negate so higher = more anomalous
-    scores_ocsvm = -ocsvm.decision_function(X_eval)
-    t_ocsvm = time.perf_counter() - t0
-    n_anom_ocsvm = (pred_ocsvm == -1).sum()
-    hit_ocsvm = _hit_rate(pred_ocsvm, y_true_binary)
-    row_ocsvm = {
-        "model": "One-Class SVM",
-        "n_anomalies": n_anom_ocsvm,
-        "pct_flagged": 100 * n_anom_ocsvm / n_eval,
-        "fraud_hit_rate": hit_ocsvm,
-        "time_sec": round(t_ocsvm, 3),
-    }
-    row_ocsvm.update(_top_k_recall(scores_ocsvm, y_true_binary, top_k_list))
-    row_ocsvm.update(_top_k_precision(scores_ocsvm, y_true_binary, top_k_list))
-    results.append(row_ocsvm)
-
-    # --- Local Outlier Factor (novelty=True so we can predict on X_eval) ---
-    n_neighbors = min(50, n_fit - 1)
-    if n_neighbors < 5:
-        n_neighbors = 5
-    t0 = time.perf_counter()
-    lof = LocalOutlierFactor(
-        n_neighbors=n_neighbors,
-        contamination=contamination,
-        metric="minkowski",
-        p=2,
-        novelty=True,
-    )
-    lof.fit(X_fit)
-    pred_lof = lof.predict(X_eval)
-    # score_samples: more negative = more anomalous; negate so higher = more anomalous
-    scores_lof = -lof.score_samples(X_eval)
-    t_lof = time.perf_counter() - t0
-    n_anom_lof = (pred_lof == -1).sum()
-    hit_lof = _hit_rate(pred_lof, y_true_binary)
-    row_lof = {
-        "model": "LOF",
-        "n_anomalies": n_anom_lof,
-        "pct_flagged": 100 * n_anom_lof / n_eval,
-        "fraud_hit_rate": hit_lof,
-        "time_sec": round(t_lof, 3),
-    }
-    row_lof.update(_top_k_recall(scores_lof, y_true_binary, top_k_list))
-    row_lof.update(_top_k_precision(scores_lof, y_true_binary, top_k_list))
-    results.append(row_lof)
-
-    scores = {"iso": scores_iso, "ocsvm": scores_ocsvm, "lof": scores_lof}
-    return pd.DataFrame(results), {"iso": pred_iso, "ocsvm": pred_ocsvm, "lof": pred_lof}, scores
-
+from fit_and_evaluate import fit_and_evaluate
+from synt_data_generation import generate_synthetic_data
 
 def _plot_anomaly_score_distributions(
     scores: dict,
@@ -213,55 +75,6 @@ def _plot_anomaly_score_distributions(
         plt.show()
 
 
-def _hit_rate(pred: np.ndarray, fraud_binary: np.ndarray) -> float:
-    """Fraction of known frauds that were flagged as anomaly (-1)."""
-    if fraud_binary.sum() == 0:
-        return np.nan
-    fraud_mask = fraud_binary.astype(bool)
-    return (pred[fraud_mask] == -1).mean()
-
-
-def _top_k_recall(
-    anomaly_scores: np.ndarray,
-    fraud_binary: np.ndarray,
-    k_list: list,
-) -> dict:
-    """
-    anomaly_scores: higher = more anomalous.
-    Returns dict of recall@k = (frauds in top k by score) / total_frauds.
-    """
-    n_fraud = int(fraud_binary.sum())
-    if n_fraud == 0:
-        return {f"recall@{k}": np.nan for k in k_list}
-    order = np.argsort(-anomaly_scores)
-    fraud_mask = fraud_binary.astype(bool)
-    out = {}
-    for k in k_list:
-        top_k = order[: min(k, len(order))]
-        n_fraud_in_top_k = fraud_mask[top_k].sum()
-        out[f"recall@{k}"] = n_fraud_in_top_k / n_fraud
-    return out
-
-
-def _top_k_precision(
-    anomaly_scores: np.ndarray,
-    fraud_binary: np.ndarray,
-    k_list: list,
-) -> dict:
-    """
-    anomaly_scores: higher = more anomalous.
-    Returns dict of precision@k = (frauds in top k by score) / k.
-    """
-    order = np.argsort(-anomaly_scores)
-    fraud_mask = fraud_binary.astype(bool)
-    out = {}
-    for k in k_list:
-        top_k = order[: min(k, len(order))]
-        n_fraud_in_top_k = fraud_mask[top_k].sum()
-        out[f"precision@{k}"] = n_fraud_in_top_k / k
-    return out
-
-
 def compare_models(
     activity_state: int = 2,
     days_visits: int = 2,
@@ -277,7 +90,7 @@ def compare_models(
     reports metrics for each (6 rows: 3 models x 2 scalers).
     If plot_scores_path is set, saves anomaly score distribution histograms (fraud vs non-fraud) to that file.
     """
-    df, client_data = load_data(activity_state=activity_state, days_visits=days_visits)
+    _, client_data, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     y_fraud = client_data["is_fraud"].astype(int).values
     n_fraud = y_fraud.sum()
     n_total = len(client_data)
@@ -308,10 +121,14 @@ def compare_models(
             n_train = n_total
 
         results_std, pred_std, scores_std = fit_and_evaluate(
-            X_fit_std, y_fraud, FRAUD_IDS, client_data.index, X_eval=X_eval_std,
+            X_fit_std,
+            y_fraud,
+            X_eval=X_eval_std,
         )
-        results_rob, pred_rob, scores_rob = fit_and_evaluate(
-            X_fit_rob, y_fraud, FRAUD_IDS, client_data.index, X_eval=X_eval_rob,
+        results_rob, pred_rob, _ = fit_and_evaluate(
+            X_fit_rob,
+            y_fraud,
+            X_eval=X_eval_rob,
         )
         results_std["scaler"] = "standard"
         results_rob["scaler"] = "robust"
@@ -346,7 +163,7 @@ def compare_models(
             n_train = n_total
 
         results_df, pred_single, scores = fit_and_evaluate(
-            X_fit, y_fraud, FRAUD_IDS, client_data.index, X_eval=X_eval,
+            X_fit, y_fraud, X_eval=X_eval,
         )
         predictions = {"standard": pred_single}
 
@@ -422,7 +239,7 @@ def compare_real_vs_synthetic(
     run the same three models on both with training on non-fraud only.
     Returns (results_real, results_synthetic, client_data_real, client_data_synthetic).
     """
-    df, client_data = load_data(activity_state=activity_state, days_visits=days_visits)
+    _, client_data, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     client_data = client_data[client_data["num_of_trn"] > activity_state]
     if "is_fraud" not in client_data.columns:
         client_data["is_fraud"] = client_data.index.isin(FRAUD_IDS).astype(int)
@@ -442,8 +259,6 @@ def compare_real_vs_synthetic(
     results_real, _, scores_real = fit_and_evaluate(
         X_fit_real.values,
         y_real,
-        FRAUD_IDS,
-        client_data.index,
         X_eval=X_eval_real.values,
     )
     results_real.insert(0, "dataset", "Real")
@@ -466,8 +281,6 @@ def compare_real_vs_synthetic(
     results_synt, _, scores_synt = fit_and_evaluate(
         X_fit_synt.values,
         y_synt,
-        [],  # no named fraud IDs for synthetic
-        synthetic.index,
         X_eval=X_eval_synt.values,
     )
     results_synt.insert(0, "dataset", "Synthetic")

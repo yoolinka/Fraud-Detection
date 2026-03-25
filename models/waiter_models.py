@@ -31,7 +31,7 @@ _client_models_spec = importlib.util.spec_from_file_location(
 )
 _client_models = importlib.util.module_from_spec(_client_models_spec)
 _client_models_spec.loader.exec_module(_client_models)
-fit_and_evaluate = _client_models.fit_and_evaluate
+from fit_and_evaluate import fit_and_evaluate
 
 # Waiter-level features (from waiter_models.ipynb): client anomaly score 90th percentile + share
 WAITER_FEATURES = [
@@ -192,7 +192,7 @@ def compare_waiter_models(
     then run Isolation Forest, One-Class SVM, and LOF on waiters. Print same metrics as models.py:
     hit_rate, recall@k, precision@k, n_anomalies, pct_flagged, time_sec.
     """
-    df, client_data = load_data(activity_state=activity_state, days_visits=days_visits)
+    df, client_data, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     if "top_waiter_id" not in client_data.columns:
         raise ValueError("client_data must contain 'top_waiter_id' (from client_level_features)")
 
@@ -210,8 +210,6 @@ def compare_waiter_models(
     _, _, scores_cl = fit_and_evaluate(
         X_fit_cl.values,
         y_client,
-        FRAUD_IDS,
-        client_data.index,
         X_eval=X_eval_cl.values,
     )
     anomaly_scores = pd.DataFrame(
@@ -261,8 +259,6 @@ def compare_waiter_models(
     results_df, predictions, scores = fit_and_evaluate(
         X_fit,
         y_fraud,
-        FRAUD_WAITER_IDS,
-        waiter_data.index,
         X_eval=X_eval,
     )
 
