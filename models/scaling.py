@@ -7,9 +7,14 @@ from sklearn.preprocessing import StandardScaler, RobustScaler
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
-sys.path.append(os.path.abspath(".."))
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.abspath(os.path.join(_script_dir, ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from config import load_data, FEATURES, SKEWED
-df, client_data, waiter_week_data = load_data()
+
+df, client_data, waiter_week_data, waiter_level_data = load_data()
 
 def scale_features(
         data = client_data,
@@ -18,21 +23,35 @@ def scale_features(
         skewed = SKEWED,
         show_charts = False,
         fit_data = None,
+        impute_reference = None,
 ):
     """
     Scale features (log1p for skewed, then Standard or Robust scaler).
     If fit_data is None: fit and transform on data (returns one DataFrame).
     If fit_data is not None: fit on fit_data, transform data; returns (scaled_fit_data, scaled_data).
+    If impute_reference is not None, NaN filling uses medians from that frame only (e.g. train
+    non-fraud) so test rows do not leak into imputation statistics.
     """
-    X = data[features]
-    X = X.fillna(X.median())
+    X = data[features].replace([np.inf, -np.inf], np.nan)
+    if impute_reference is not None:
+        med = impute_reference[features].median()
+        X = X.fillna(med).fillna(0)
+    else:
+        X = X.fillna(X.median()).fillna(0)
     for col in skewed:
         X[col] = np.log1p(X[col])
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(X.median()).fillna(0)
 
     if fit_data is not None:
-        X_fit = fit_data[features].fillna(fit_data[features].median()).copy()
+        X_fit = fit_data[features].copy().replace([np.inf, -np.inf], np.nan)
+        if impute_reference is not None:
+            med = impute_reference[features].median()
+            X_fit = X_fit.fillna(med).fillna(0)
+        else:
+            X_fit = X_fit.fillna(fit_data[features].median()).fillna(0)
         for col in skewed:
             X_fit[col] = np.log1p(X_fit[col])
+        X_fit = X_fit.replace([np.inf, -np.inf], np.nan).fillna(X_fit.median()).fillna(0)
         std_scaler = StandardScaler()
         rob_scaler = RobustScaler()
         std_scaler.fit(X_fit)

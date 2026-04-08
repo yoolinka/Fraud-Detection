@@ -17,7 +17,7 @@ _project_root = os.path.abspath(os.path.join(_script_dir, ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from config import load_data, FEATURES, SKEWED, FRAUD_IDS, FRAUD_WAITER_IDS
+from config import load_data, FEATURES, SKEWED
 
 import importlib.util
 _spec = importlib.util.spec_from_file_location("scaling", os.path.join(_script_dir, "scaling.py"))
@@ -39,142 +39,11 @@ WAITER_FEATURES = [
     "ocsvm_90",
     "lof_90",
     "share_active_clients_only_this_waiter",
+    'share_anomaly_weeks_iso',
+    'share_anomaly_weeks_ocsvm',
+    'share_anomaly_weeks_lof'
 ]
 WAITER_SKEWED: list = []
-
-
-def _build_waiter_data(df: pd.DataFrame, client_data: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build waiter-level DataFrame from transaction df and client_data (with anomaly scores).
-    client_data must have anomaly_score_iso, anomaly_score_ocsvm, anomaly_score_lof, top_waiter_id, num_of_trn, days_visits.
-    df must have person_id, waiter_id, place_id, date, trn_id and the same anomaly score columns after merge.
-    """
-    # Merge anomaly scores from client_data into df (df has person_id)
-    if "anomaly_score_iso" not in df.columns and "anomaly_score_iso" in client_data.columns:
-        scores = client_data[["anomaly_score_iso", "anomaly_score_ocsvm", "anomaly_score_lof"]]
-        df = df.merge(scores, left_on="person_id", right_index=True, how="left")
-    elif "anomaly_score_iso" not in df.columns:
-        raise ValueError("Anomaly scores must be in df or client_data")
-
-    waiter_data = df.groupby("waiter_id").agg(
-        iso_90=("anomaly_score_iso", lambda x: x.quantile(0.9)),
-        ocsvm_90=("anomaly_score_ocsvm", lambda x: x.quantile(0.9)),
-        lof_90=("anomaly_score_lof", lambda x: x.quantile(0.9)),
-        num_of_trn=("trn_id", "nunique"),
-        num_of_clients=("person_id", "nunique"),
-        working_days=("date", "nunique"),
-    ).reset_index()
-
-    fraud_waiter_ids = client_data[client_data["is_fraud"] == 1]["top_waiter_id"].dropna().unique()
-    waiter_data["is_fraud"] = waiter_data["waiter_id"].isin(fraud_waiter_ids)
-
-    active_person_ids = client_data[
-        (client_data["num_of_trn"] > 5) & (client_data["days_visits"] > 5)
-    ].index
-
-    active_clients_per_waiter = (
-        df[df["person_id"].isin(active_person_ids)]
-        .groupby("waiter_id")["person_id"]
-        .nunique()
-        .rename("num_of_active_clients")
-    )
-    waiter_data = waiter_data.merge(
-        active_clients_per_waiter, left_on="waiter_id", right_index=True, how="left"
-    )
-    waiter_data["num_of_active_clients"] = waiter_data["num_of_active_clients"].fillna(0).astype(int)
-
-    person_place_waiter = (
-        df.groupby(["person_id", "place_id"])["waiter_id"]
-        .nunique()
-        .reset_index(name="num_waiters_in_place")
-    )
-    single_waiter_person_place = person_place_waiter[
-        person_place_waiter["num_waiters_in_place"] == 1
-    ][["person_id", "place_id"]]
-    person_place_waiter_map = df[["person_id", "place_id", "waiter_id"]].drop_duplicates()
-    single_waiter_records = single_waiter_person_place.merge(
-        person_place_waiter_map, on=["person_id", "place_id"], how="left"
-    )
-
-    clients_only_this_waiter = (
-        single_waiter_records.groupby("waiter_id")["person_id"]
-        .nunique()
-        .rename("num_clients_only_this_waiter")
-    )
-    waiter_data = waiter_data.merge(
-        clients_only_this_waiter, left_on="waiter_id", right_index=True, how="left"
-    )
-    waiter_data["num_clients_only_this_waiter"] = (
-        waiter_data["num_clients_only_this_waiter"].fillna(0).astype(int)
-    )
-
-    single_waiter_active_records = single_waiter_records[
-        single_waiter_records["person_id"].isin(active_person_ids)
-    ]
-    active_clients_only_this_waiter = (
-        single_waiter_active_records.groupby("waiter_id")["person_id"]
-        .nunique()
-        .rename("num_active_clients_only_this_waiter")
-    )
-    waiter_data = waiter_data.merge(
-        active_clients_only_this_waiter, left_on="waiter_id", right_index=True, how="left"
-    )
-    waiter_data["num_active_clients_only_this_waiter"] = (
-        waiter_data["num_active_clients_only_this_waiter"].fillna(0).astype(int)
-    )
-
-    person_waiter = (
-        df.groupby("person_id")["waiter_id"].nunique().reset_index(name="num_waiters_total")
-    )
-    single_waiter_total_persons = person_waiter[person_waiter["num_waiters_total"] == 1][["person_id"]]
-    person_waiter_total_map = df[["person_id", "waiter_id"]].drop_duplicates()
-    single_waiter_total_records = single_waiter_total_persons.merge(
-        person_waiter_total_map, on="person_id", how="left"
-    )
-
-    clients_single_waiter_total = (
-        single_waiter_total_records.groupby("waiter_id")["person_id"]
-        .nunique()
-        .rename("num_clients_single_waiter_total")
-    )
-    waiter_data = waiter_data.merge(
-        clients_single_waiter_total, left_on="waiter_id", right_index=True, how="left"
-    )
-    waiter_data["num_clients_single_waiter_total"] = (
-        waiter_data["num_clients_single_waiter_total"].fillna(0).astype(int)
-    )
-
-    single_waiter_total_active_records = single_waiter_total_records[
-        single_waiter_total_records["person_id"].isin(active_person_ids)
-    ]
-    active_clients_single_waiter_total = (
-        single_waiter_total_active_records.groupby("waiter_id")["person_id"]
-        .nunique()
-        .rename("num_active_clients_single_waiter_total")
-    )
-    waiter_data = waiter_data.merge(
-        active_clients_single_waiter_total, left_on="waiter_id", right_index=True, how="left"
-    )
-    waiter_data["num_active_clients_single_waiter_total"] = (
-        waiter_data["num_active_clients_single_waiter_total"].fillna(0).astype(int)
-    )
-
-    waiter_data["share_clients_only_this_waiter"] = (
-        waiter_data["num_clients_only_this_waiter"] / waiter_data["num_of_clients"]
-    ).fillna(0)
-    waiter_data["share_active_clients_only_this_waiter"] = (
-        waiter_data["num_active_clients_only_this_waiter"]
-        / waiter_data["num_of_active_clients"].replace(0, np.nan)
-    ).fillna(0)
-    waiter_data["share_clients_single_waiter_total"] = (
-        waiter_data["num_clients_single_waiter_total"] / waiter_data["num_of_clients"]
-    ).fillna(0)
-    waiter_data["share_active_clients_single_waiter_total"] = (
-        waiter_data["num_active_clients_single_waiter_total"]
-        / waiter_data["num_of_active_clients"].replace(0, np.nan)
-    ).fillna(0)
-
-    return waiter_data
 
 
 def compare_waiter_models(
@@ -186,13 +55,14 @@ def compare_waiter_models(
     waiter_features: list = WAITER_FEATURES,
     waiter_skewed: list = WAITER_SKEWED,
     waiter_data: pd.DataFrame = None,
+    total_num_of_trn: int = 8,
 ):
     """
     Load client data, compute client-level anomaly scores, build waiter-level features,
     then run Isolation Forest, One-Class SVM, and LOF on waiters. Print same metrics as models.py:
     hit_rate, recall@k, precision@k, n_anomalies, pct_flagged, time_sec.
     """
-    df, client_data, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    df, client_data, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     if "top_waiter_id" not in client_data.columns:
         raise ValueError("client_data must contain 'top_waiter_id' (from client_level_features)")
 
@@ -225,9 +95,11 @@ def compare_waiter_models(
 
     # --- Build waiter-level data and filter by working_days ---
     if waiter_data is None:
-        waiter_data = _build_waiter_data(df, client_data)
-        waiter_data = waiter_data.set_index("waiter_id")
-    
+        _, _, _, waiter_data = load_data(
+            activity_state=activity_state,
+            days_visits=days_visits,
+            total_num_of_trn=total_num_of_trn,
+        )
     waiter_data = waiter_data[waiter_data["working_days"] > min_working_days].copy()
 
     y_fraud = waiter_data["is_fraud"].astype(int).values
@@ -310,7 +182,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Waiter anomaly detection: IF, OCSVM, LOF")
     parser.add_argument("--activity-state", type=int, default=2)
     parser.add_argument("--days-visits", type=int, default=2)
-    parser.add_argument("--min-working-days", type=int, default=20)
+    parser.add_argument("--min-working-days", type=int, default=5)
     parser.add_argument("--plot", type=str, default=None, help="Path to save score distribution plot")
     args = parser.parse_args()
     compare_waiter_models(

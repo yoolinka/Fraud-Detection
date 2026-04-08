@@ -75,12 +75,33 @@ def _plot_anomaly_score_distributions(
         plt.show()
 
 
+def _write_person_anomaly_scores_csv(
+    person_index: pd.Index,
+    scores: dict,
+    path: str,
+) -> None:
+    """One row per person_id with IF / OCSVM / LOF scores (higher = more anomalous)."""
+    out = pd.DataFrame(
+        {
+            "person_id": person_index,
+            "iso_score": np.asarray(scores["iso"], dtype=np.float64),
+            "ocsvm_score": np.asarray(scores["ocsvm"], dtype=np.float64),
+            "lof_score": np.asarray(scores["lof"], dtype=np.float64),
+        }
+    )
+    d = os.path.dirname(os.path.abspath(path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    out.to_csv(path, index=False)
+
+
 def compare_models(
     activity_state: int = 2,
     days_visits: int = 2,
     exclude_fraud_from_training: bool = True,
     compare_scalers: bool = False,
     plot_scores_path: Optional[str] = None,
+    scores_csv_path: Optional[str] = None,
 ):
     """Load data, scale, run all three models, and print comparison.
 
@@ -89,8 +110,10 @@ def compare_models(
     If compare_scalers=True, runs with both StandardScaler and RobustScaler and
     reports metrics for each (6 rows: 3 models x 2 scalers).
     If plot_scores_path is set, saves anomaly score distribution histograms (fraud vs non-fraud) to that file.
+    If scores_csv_path is set, writes person_id and the three anomaly scores to CSV (standard scaler when
+    compare_scalers=True, same scores as the distribution plot).
     """
-    _, client_data, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    _, client_data, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     y_fraud = client_data["is_fraud"].astype(int).values
     n_fraud = y_fraud.sum()
     n_total = len(client_data)
@@ -186,6 +209,10 @@ def compare_models(
         _scores = scores_std if compare_scalers else scores
         _plot_anomaly_score_distributions(_scores, y_fraud, plot_scores_path)
         print(f"Anomaly score distributions saved to {plot_scores_path}")
+    if scores_csv_path:
+        _scores_csv = scores_std if compare_scalers else scores
+        _write_person_anomaly_scores_csv(client_data.index, _scores_csv, scores_csv_path)
+        print(f"Per-person anomaly scores saved to {scores_csv_path}")
     print()
     print("Metrics:")
     print("  - n_anomalies: number of points flagged as anomaly (-1)")
@@ -239,7 +266,7 @@ def compare_real_vs_synthetic(
     run the same three models on both with training on non-fraud only.
     Returns (results_real, results_synthetic, client_data_real, client_data_synthetic).
     """
-    _, client_data, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    _, client_data, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     client_data = client_data[client_data["num_of_trn"] > activity_state]
     if "is_fraud" not in client_data.columns:
         client_data["is_fraud"] = client_data.index.isin(FRAUD_IDS).astype(int)
@@ -313,17 +340,27 @@ if __name__ == "__main__":
     parser.add_argument("--synthetic", action="store_true", help="Compare real vs synthetic data (default: only real)")
     parser.add_argument("--activity-state", type=int, default=1, help="Filter clients with num_of_trn > this")
     parser.add_argument("--n-synthetic", type=int, default=500, help="Number of synthetic fraud samples")
+    parser.add_argument(
+        "--scores-csv",
+        type=str,
+        default=None,
+        help="Path for CSV of person_id + iso/ocsvm/lof scores (default: client_anomaly_scores.csv)",
+    )
     args = parser.parse_args()
+    default_plot = os.path.join(_project_root, "anomaly_score_distributions.png")
+    default_scores_csv = os.path.join(_project_root, "client_anomaly_scores.csv")
+    scores_csv = args.scores_csv if args.scores_csv is not None else default_scores_csv
     if args.synthetic:
         compare_real_vs_synthetic(
             activity_state=args.activity_state,
             n_synthetic=args.n_synthetic,
-            plot_scores_path=os.path.join(_project_root, "anomaly_score_distributions.png"),
+            plot_scores_path=default_plot,
         )
     else:
         compare_models(
             activity_state=args.activity_state,
             exclude_fraud_from_training=True,
             compare_scalers=False,
-            plot_scores_path=os.path.join(_project_root, "anomaly_score_distributions.png"),
+            plot_scores_path=default_plot,
+            scores_csv_path=scores_csv,
         )
