@@ -78,9 +78,6 @@ def fit_and_evaluate(
     Fit each model on X_fit, predict on X_eval (or X_fit if X_eval is None).
     y_true_binary: 1 for known fraud, 0 otherwise; length must match X_eval (or X_fit).
     max_ocsvm_train: One-Class SVM is slow; if n_fit > this, fit OCSVM on a subsample (default 4000).
-    write_scores_csv: if True, write scores to CSV (see scores_csv_path).
-    scores_csv_path: output CSV path; default is models/anomaly_scores.csv next to this file.
-        Note: repo .gitignore may list *.csv — the file can exist even if the IDE hides it.
     """
     X_eval = X_eval if X_eval is not None else X_fit
     n_fit, n_eval = len(X_fit), len(X_eval)
