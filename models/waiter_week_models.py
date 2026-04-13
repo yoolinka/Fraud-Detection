@@ -37,71 +37,20 @@ from fit_and_evaluate import fit_and_evaluate
 from synt_data_generation import generate_synthetic_data
 
 WAITER_WEEK_FEATURES = [
-    'top1_client_trn',
-    'top1_client_trn_diff_next',
-    'trn_per_person_norm',
+    'share_loyal_trn',
     'bonusses_accum',
     'trn_per_person',
-    'working_days',
-    'top1_client_trn_diff_prev',
-    'mean_check',
-    'bonusses_used',
-    'share_unique_clients',
-    'new_clients_norm',
-    'share_of_clients_diff_prev',
-    'place_num_of_waiters',
+    'top1_client_trn',
     'top1_client_share_norm',
-    'share_loyal_trn',
+    'bonusses_used_norm_l',
     'trn_per_person_diff_prev',
-    ]
-# [
-#     # "share_new_clients",
-#     # "bonusses_accum",
-#     # "new_clients",
-#     # "mean_check",
-#     # "trn_per_day",
-#     # "top1_client_share_norm",
-#     # "share_unique_clients",
-#     # "diff_share_of_trn",
-#     'trn_per_person_norm',
-#     'trn_per_person_norm_diff_prev',
-#     'mean_check_diff_next',
-#     'mean_check',
-#     'top1_client_share_norm_perc_diff_prev',
-#     'bonusses_used_diff_next',
-#     'trn_per_person_norm_perc_diff_next',
-#     'top1_client_trn',
-#     'top1_client_share_norm_perc_diff_next'
-# ]
-    
-
-WAITER_WEEK_SKEWED = [
-    'top1_client_trn',
-    'top1_client_trn_diff_next',
-    'trn_per_person_norm',
-    'bonusses_accum',
-    'trn_per_person',
-    # 'working_days',
-    'top1_client_trn_diff_prev',
-    'mean_check',
     'bonusses_used',
-    # 'share_unique_clients',
-    'new_clients_norm',
-    # 'share_of_clients_diff_prev',
-    'place_num_of_waiters',
+    'top1_client_trn_diff_next',
+    'share_new_clients',
+    'share_new_clients_norm_diff_prev',
     'top1_client_share_norm',
-    'share_loyal_trn',
-    'trn_per_person_diff_prev'
-    ]
-# [
-#     'trn_per_person_norm',
-#     'trn_per_person_norm_diff_prev',
-#     'mean_check_diff_next',
-#     'mean_check',
-#     'bonusses_used_diff_next',
-#     'trn_per_person_norm_perc_diff_next',
-#     'top1_client_trn',
-# ]
+    'bonusses_trn'
+]
 def _waiter_id_week_for_csv(waiter_week_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """Resolve waiter_id and week columns, or derive week from index + waiter_id (see parquet pipeline)."""
     idx = waiter_week_data.index
@@ -154,7 +103,6 @@ def _write_waiter_week_scores_csv(
 
 def compare_waiter_week_models(
     waiter_features: Sequence[str] = WAITER_WEEK_FEATURES,
-    waiter_skewed: Sequence[str] = WAITER_WEEK_SKEWED,
     agg_data: Optional[pd.DataFrame] = None,
     fraud_waiter_week_ids: Optional[Union[Sequence, np.ndarray]] = None,
     min_num_of_trn: int = 8,
@@ -211,7 +159,6 @@ def compare_waiter_week_models(
         X_fit_df, X_eval_df = scale_features(
             data=waiter_week_data,
             features=waiter_features,
-            skewed=waiter_skewed,
             scaler_type="standard",
             fit_data=fit_subset,
         )
@@ -222,7 +169,6 @@ def compare_waiter_week_models(
         X_full = scale_features(
             data=waiter_week_data,
             features=waiter_features,
-            skewed=waiter_skewed,
             scaler_type="standard",
         )
         X_fit = X_eval = np.asarray(X_full.values, dtype=np.float64)
@@ -281,7 +227,6 @@ def compare_waiter_week_models(
 
 def compare_waiter_week_real_vs_synthetic(
     waiter_features: Sequence[str] = WAITER_WEEK_FEATURES,
-    waiter_skewed: Sequence[str] = WAITER_WEEK_SKEWED,
     agg_data: Optional[pd.DataFrame] = None,
     fraud_waiter_week_ids: Optional[Union[Sequence, np.ndarray]] = None,
     min_num_of_trn: int = 8,
@@ -331,7 +276,6 @@ def compare_waiter_week_real_vs_synthetic(
     X_fit_real, X_eval_real = scale_features(
         data=waiter_week_data,
         features=waiter_features,
-        skewed=waiter_skewed,
         scaler_type="standard",
         fit_data=train_data,
     )
@@ -354,7 +298,6 @@ def compare_waiter_week_real_vs_synthetic(
     X_fit_synt, X_eval_synt = scale_features(
         data=synthetic,
         features=waiter_features,
-        skewed=waiter_skewed,
         scaler_type="standard",
         fit_data=train_synt,
     )
@@ -410,6 +353,7 @@ if __name__ == "__main__":
         default=None,
         help="Path for CSV of waiter_week + iso/ocsvm/lof scores (default: waiter_week_anomaly_scores.csv)",
     )
+    parser.add_argument("--place-num-of-waiters", type=int, default=2, help="Place num of waiters lower bound (inclusive)")
     args = parser.parse_args()
     default_plot = os.path.join(_project_root, "waiter_week_anomaly_score_distributions.png")
     default_scores_csv = os.path.join(_project_root, "waiter_week_anomaly_scores.csv")
@@ -426,4 +370,5 @@ if __name__ == "__main__":
             exclude_fraud_from_training=True,
             plot_scores_path=args.plot or default_plot,
             scores_csv_path=scores_csv,
+            place_num_of_waiters=args.place_num_of_waiters,
         )

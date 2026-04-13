@@ -20,7 +20,7 @@ _project_root = os.path.abspath(os.path.join(_script_dir, ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from config import load_data, FEATURES, SKEWED, FRAUD_IDS, DATA_PATH
+from config import load_data, FEATURES, FRAUD_IDS, DATA_PATH
 
 import importlib.util
 _spec = importlib.util.spec_from_file_location("scaling", os.path.join(_script_dir, "scaling.py"))
@@ -124,20 +124,20 @@ def compare_models(
             train_mask = ~client_data["is_fraud"].values
             train_data = client_data.loc[train_mask]
             X_fit_std, X_eval_std = scale_features(
-                data=client_data, scaler_type="standard", features=FEATURES, skewed=SKEWED, fit_data=train_data,
+                data=client_data, scaler_type="standard", features=FEATURES, fit_data=train_data,
             )
             X_fit_rob, X_eval_rob = scale_features(
-                data=client_data, scaler_type="robust", features=FEATURES, skewed=SKEWED, fit_data=train_data,
+                data=client_data, scaler_type="robust", features=FEATURES, fit_data=train_data,
             )
             X_fit_std, X_eval_std = X_fit_std.values, X_eval_std.values
             X_fit_rob, X_eval_rob = X_fit_rob.values, X_eval_rob.values
             n_train = len(train_data)
         else:
             X_std = scale_features(
-                data=client_data, scaler_type="standard", features=FEATURES, skewed=SKEWED,
+                data=client_data, scaler_type="standard", features=FEATURES,
             )
             X_rob = scale_features(
-                data=client_data, scaler_type="robust", features=FEATURES, skewed=SKEWED,
+                data=client_data, scaler_type="robust", features=FEATURES,
             )
             X_fit_std = X_eval_std = X_std.values
             X_fit_rob = X_eval_rob = X_rob.values
@@ -170,7 +170,6 @@ def compare_models(
                 data=client_data,
                 scaler_type="standard",
                 features=FEATURES,
-                skewed=SKEWED,
                 fit_data=train_data,
             )
             X_fit, X_eval = X_fit.values, X_eval.values
@@ -180,7 +179,6 @@ def compare_models(
                 data=client_data,
                 scaler_type="standard",
                 features=FEATURES,
-                skewed=SKEWED,
             )
             X_fit = X_eval = X.values
             n_train = n_total
@@ -280,7 +278,6 @@ def compare_real_vs_synthetic(
         data=client_data,
         scaler_type="standard",
         features=FEATURES,
-        skewed=SKEWED,
         fit_data=train_data,
     )
     results_real, _, scores_real = fit_and_evaluate(
@@ -302,7 +299,6 @@ def compare_real_vs_synthetic(
         data=synthetic,
         scaler_type="standard",
         features=FEATURES,
-        skewed=SKEWED,
         fit_data=train_synt,
     )
     results_synt, _, scores_synt = fit_and_evaluate(

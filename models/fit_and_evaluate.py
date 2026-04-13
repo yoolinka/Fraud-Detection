@@ -90,7 +90,8 @@ def fit_and_evaluate(
     t0 = time.perf_counter()
     iso = IsolationForest(
         n_estimators=100,
-        contamination=contamination,
+        contamination=0.0005,
+        max_samples=1.0,
         random_state=42,
         n_jobs=-1,
     )
@@ -113,7 +114,7 @@ def fit_and_evaluate(
     results.append(row_iso)
 
     # --- One-Class SVM (subsample if large: RBF fit is O(n²)) ---
-    nu = 0.001
+    nu = 0.0005
     t0 = time.perf_counter()
     rng = np.random.default_rng(42)
     if n_fit > max_ocsvm_train:
@@ -141,13 +142,13 @@ def fit_and_evaluate(
     results.append(row_ocsvm)
 
     # --- Local Outlier Factor (novelty=True so we can predict on X_eval) ---
-    n_neighbors = min(50, n_fit - 1)
-    if n_neighbors < 5:
-        n_neighbors = 5
+    # n_neighbors = min(50, n_fit - 1)
+    # if n_neighbors < 5:
+    n_neighbors = 5
     t0 = time.perf_counter()
     lof = LocalOutlierFactor(
         n_neighbors=n_neighbors,
-        contamination=contamination,
+        contamination=0.01,
         metric="minkowski",
         p=2,
         novelty=True,

@@ -17,7 +17,7 @@ _project_root = os.path.abspath(os.path.join(_script_dir, ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from config import load_data, FEATURES, SKEWED
+from config import load_data, FEATURES
 
 import importlib.util
 _spec = importlib.util.spec_from_file_location("scaling", os.path.join(_script_dir, "scaling.py"))
@@ -43,7 +43,6 @@ WAITER_FEATURES = [
     'share_anomaly_weeks_ocsvm',
     'share_anomaly_weeks_lof'
 ]
-WAITER_SKEWED: list = []
 
 
 def compare_waiter_models(
@@ -53,7 +52,6 @@ def compare_waiter_models(
     exclude_fraud_from_training: bool = True,
     plot_scores_path: Optional[str] = None,
     waiter_features: list = WAITER_FEATURES,
-    waiter_skewed: list = WAITER_SKEWED,
     waiter_data: pd.DataFrame = None,
     total_num_of_trn: int = 8,
 ):
@@ -73,7 +71,6 @@ def compare_waiter_models(
         data=client_data,
         scaler_type="standard",
         features=FEATURES,
-        skewed=SKEWED,
         fit_data=train_data,
     )
     y_client = client_data["is_fraud"].astype(int).values
@@ -111,7 +108,6 @@ def compare_waiter_models(
         X_fit_df, X_eval_df = scale_features(
             data=waiter_data,
             features=waiter_features,
-            skewed=waiter_skewed,
             scaler_type="standard",
             fit_data=non_fraud_waiters,
         )
@@ -122,7 +118,6 @@ def compare_waiter_models(
         X_full = scale_features(
             data=waiter_data,
             features=waiter_features,
-            skewed=waiter_skewed,
             scaler_type="standard",
         )
         X_fit = X_eval = np.asarray(X_full.values, dtype=np.float64)
