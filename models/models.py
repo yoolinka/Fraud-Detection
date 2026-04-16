@@ -96,12 +96,14 @@ def _write_person_anomaly_scores_csv(
 
 
 def compare_models(
-    activity_state: int = 2,
+    activity_state: int = 1,
     days_visits: int = 2,
     exclude_fraud_from_training: bool = True,
     compare_scalers: bool = False,
     plot_scores_path: Optional[str] = None,
     scores_csv_path: Optional[str] = None,
+    n_neighbors: int = 5,
+    n_estimators: int = 200,
 ):
     """Load data, scale, run all three models, and print comparison.
 
@@ -147,11 +149,15 @@ def compare_models(
             X_fit_std,
             y_fraud,
             X_eval=X_eval_std,
+            n_neighbors=n_neighbors,
+            n_estimators=n_estimators,
         )
         results_rob, pred_rob, _ = fit_and_evaluate(
             X_fit_rob,
             y_fraud,
             X_eval=X_eval_rob,
+            n_neighbors=n_neighbors,
+            n_estimators=n_estimators,
         )
         results_std["scaler"] = "standard"
         results_rob["scaler"] = "robust"
@@ -185,6 +191,8 @@ def compare_models(
 
         results_df, pred_single, scores = fit_and_evaluate(
             X_fit, y_fraud, X_eval=X_eval,
+            n_neighbors=n_neighbors,
+            n_estimators=n_estimators,
         )
         predictions = {"standard": pred_single}
 
@@ -223,41 +231,43 @@ def compare_models(
         print("  - scaler: StandardScaler vs RobustScaler (median/IQR-based)")
     print()
 
-    fraud_mask = client_data["is_fraud"].values
-    fraud_index = np.where(fraud_mask)[0]
-    print("Known frauds — which model flagged them (-1 = anomaly):")
-    print("-" * 60)
-    if compare_scalers:
-        for i in fraud_index:
-            pid = client_data.index[i]
-            row = (
-                f"  person_id={pid}: "
-                f"IF_std={pred_std['iso'][i]} IF_rob={pred_rob['iso'][i]} | "
-                f"OCSVM_std={pred_std['ocsvm'][i]} OCSVM_rob={pred_rob['ocsvm'][i]} | "
-                f"LOF_std={pred_std['lof'][i]} LOF_rob={pred_rob['lof'][i]}"
-            )
-            print(row)
-    else:
-        pred = predictions["standard"]
-        for i in fraud_index:
-            pid = client_data.index[i]
-            row = (
-                f"  person_id={pid}: "
-                f"IF={pred['iso'][i]}, OCSVM={pred['ocsvm'][i]}, LOF={pred['lof'][i]}"
-            )
-            print(row)
-    print()
+    # fraud_mask = client_data["is_fraud"].values
+    # fraud_index = np.where(fraud_mask)[0]
+    # print("Known frauds — which model flagged them (-1 = anomaly):")
+    # print("-" * 60)
+    # if compare_scalers:
+    #     for i in fraud_index:
+    #         pid = client_data.index[i]
+    #         row = (
+    #             f"  person_id={pid}: "
+    #             f"IF_std={pred_std['iso'][i]} IF_rob={pred_rob['iso'][i]} | "
+    #             f"OCSVM_std={pred_std['ocsvm'][i]} OCSVM_rob={pred_rob['ocsvm'][i]} | "
+    #             f"LOF_std={pred_std['lof'][i]} LOF_rob={pred_rob['lof'][i]}"
+    #         )
+    #         print(row)
+    # else:
+    #     pred = predictions["standard"]
+    #     for i in fraud_index:
+    #         pid = client_data.index[i]
+    #         row = (
+    #             f"  person_id={pid}: "
+    #             f"IF={pred['iso'][i]}, OCSVM={pred['ocsvm'][i]}, LOF={pred['lof'][i]}"
+    #         )
+    #         print(row)
+    # print()
     X_out = pd.DataFrame(X_eval, index=client_data.index, columns=FEATURES)
     return results_df, predictions, client_data, X_out
 
 
 def compare_real_vs_synthetic(
-    activity_state: int = 2,
+    activity_state: int = 1,
     days_visits: int = 2,
     n_synthetic: int = 500,
     noise_scale: float = 0.1,
     random_state: int = 42,
     plot_scores_path: Optional[str] = None,
+    n_neighbors: int = 5,
+    n_estimators: int = 200,
 ) -> tuple:
     """
     Load real data, generate synthetic data (non-fraud + synthetic fraud),
@@ -284,6 +294,8 @@ def compare_real_vs_synthetic(
         X_fit_real.values,
         y_real,
         X_eval=X_eval_real.values,
+        n_neighbors=n_neighbors,
+        n_estimators=n_estimators,
     )
     results_real.insert(0, "dataset", "Real")
 
@@ -305,6 +317,8 @@ def compare_real_vs_synthetic(
         X_fit_synt.values,
         y_synt,
         X_eval=X_eval_synt.values,
+        n_neighbors=n_neighbors,
+        n_estimators=n_estimators,
     )
     results_synt.insert(0, "dataset", "Synthetic")
 

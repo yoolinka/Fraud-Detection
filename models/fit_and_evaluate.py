@@ -73,6 +73,8 @@ def fit_and_evaluate(
     y_true_binary: np.ndarray,
     X_eval: Optional[np.ndarray] = None,
     max_ocsvm_train: int = 4000,
+    n_neighbors: int = 5,
+    n_estimators: int = 100
 ):
     """
     Fit each model on X_fit, predict on X_eval (or X_fit if X_eval is None).
@@ -86,10 +88,9 @@ def fit_and_evaluate(
     results = []
 
     # --- Isolation Forest ---
-    contamination = 0.001
     t0 = time.perf_counter()
     iso = IsolationForest(
-        n_estimators=100,
+        n_estimators=n_estimators,
         contamination=0.0005,
         max_samples=1.0,
         random_state=42,
@@ -144,7 +145,6 @@ def fit_and_evaluate(
     # --- Local Outlier Factor (novelty=True so we can predict on X_eval) ---
     # n_neighbors = min(50, n_fit - 1)
     # if n_neighbors < 5:
-    n_neighbors = 5
     t0 = time.perf_counter()
     lof = LocalOutlierFactor(
         n_neighbors=n_neighbors,

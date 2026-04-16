@@ -36,20 +36,80 @@ _client_models_spec.loader.exec_module(_client_models)
 from fit_and_evaluate import fit_and_evaluate
 from synt_data_generation import generate_synthetic_data
 
-WAITER_WEEK_FEATURES = [
-    'share_loyal_trn',
+WAITER_WEEK_FEATURES_ISO = [
+    # ISO precision@100 = 0.10, precision@50 = 0.18
+    'trn_per_person_norm',
+    'top1_client_trn',
     'bonusses_accum',
     'trn_per_person',
-    'top1_client_trn',
     'top1_client_share_norm',
-    'bonusses_used_norm_l',
-    'trn_per_person_diff_prev',
-    'bonusses_used',
     'top1_client_trn_diff_next',
-    'share_new_clients',
-    'share_new_clients_norm_diff_prev',
+    'top1_client_trn_diff_prev',
+    'mean_check',
+    'bonusses_used',
+    'top1_client_trn_perc_diff_next'
+]
+WAITER_WEEK_FEATURES_OCSVM = [
+    # OCSVM precision@100 = 0.09, precision@50 = 0.14
+    'trn_per_person_norm',
+    'trn_per_person_perc_diff_next',
     'top1_client_share_norm',
-    'bonusses_trn'
+    'bonusses_accum_diff_prev',
+    'share_loyal_trn'
+]
+WAITER_WEEK_FEATURES_LOF = [
+   # LOF precision@100 = 0.12
+    'trn_per_day_norm',
+    'bonusses_accum_diff_next',
+    'trn_per_person_perc_diff_next',
+    'trn_per_person_norm_perc_diff_next',
+    'trn_per_person',
+    'unique_persons_diff_next',
+    'trn_per_person_norm',
+    'bonusses_accum',
+    'mean_check',
+    'top1_client_share_norm',
+    'unique_clients_per_day',
+    'unique_clients_per_day_diff_prev',
+    'top1_client_trn_diff_next',
+    'bonusses_trn',
+    'unique_clients_per_day_perc_diff_prev',
+    'trn_per_person_norm_perc_diff_prev',
+    'share_bonusses_trn',
+    'top1_client_trn_diff_prev',
+    'share_loyal_trn'
+
+    # LOF precision@100 = 0.11, precision@50 = 0.16
+    # 'trn_per_person_norm',
+    # 'top1_client_trn',
+    # 'top1_client_share',
+    # 'share_loyal_trn',
+    # 'bonusses_accum',
+    # 'trn_per_person',
+    # 'top1_client_share_norm',
+    # 'top1_client_trn_diff_next',
+    # 'top1_client_trn_diff_prev',
+    # 'trn_count_nonloyal_diff_prev',
+    # 'mean_check',
+    # 'bonusses_accum_diff_next',
+    # 'bonusses_used',
+    # 'trn_per_person_diff_prev',
+    # 'trn_count_nonloyal',
+    # 'bonusses_accum_diff_prev',
+    # 'bonusses_trn',
+    # 'trn_per_person_norm_perc_diff_next',
+    # 'share_loyal_trn_perc_diff_next',
+    # 'trn_per_person_perc_diff_prev',
+    # 'unique_clients_per_day_diff_next',
+    # 'share_new_clients_norm_diff_next',
+    # 'share_of_trn_diff_next',
+    # 'unique_clients_per_day',
+    # 'share_new_clients',
+    # 'trn_per_person_norm_diff_next',
+    # 'bonusses_used_norm_l'
+]
+WAITER_WEEK_FEATURES = [
+
 ]
 def _waiter_id_week_for_csv(waiter_week_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """Resolve waiter_id and week columns, or derive week from index + waiter_id (see parquet pipeline)."""
@@ -201,17 +261,17 @@ def compare_waiter_week_models(
     print("  - time_sec: fit+predict time in seconds")
     print()
 
-    fraud_index = np.where(y_fraud.astype(bool))[0]
-    print("Known fraud waiter-weeks — which model flagged them (-1 = anomaly):")
-    print("-" * 60)
-    for i in fraud_index:
-        wid = waiter_week_data.index[i]
-        row = (
-            f"  waiter_week={wid}: "
-            f"IF={predictions['iso'][i]}, OCSVM={predictions['ocsvm'][i]}, LOF={predictions['lof'][i]}"
-        )
-        print(row)
-    print()
+    # fraud_index = np.where(y_fraud.astype(bool))[0]
+    # print("Known fraud waiter-weeks — which model flagged them (-1 = anomaly):")
+    # print("-" * 60)
+    # for i in fraud_index:
+    #     wid = waiter_week_data.index[i]
+    #     row = (
+    #         f"  waiter_week={wid}: "
+    #         f"IF={predictions['iso'][i]}, OCSVM={predictions['ocsvm'][i]}, LOF={predictions['lof'][i]}"
+    #     )
+    #     print(row)
+    # print()
 
     if plot_scores_path:
         _client_models._plot_anomaly_score_distributions(scores, y_fraud, plot_scores_path)
