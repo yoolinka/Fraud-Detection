@@ -5,7 +5,7 @@ Compare Isolation Forest, One-Class SVM, and LOF on waiter–week level features
 import os
 import sys
 import warnings
-from typing import Optional, Sequence, Tuple, Union
+from typing import Dict, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -33,7 +33,7 @@ _client_models_spec = importlib.util.spec_from_file_location(
 _client_models = importlib.util.module_from_spec(_client_models_spec)
 _client_models_spec.loader.exec_module(_client_models)
 
-from fit_and_evaluate import fit_and_evaluate
+from fit_and_evaluate import fit_and_evaluate_per_model
 from synt_data_generation import generate_synthetic_data
 
 WAITER_WEEK_FEATURES_ISO = [
@@ -77,8 +77,7 @@ WAITER_WEEK_FEATURES_LOF = [
     'trn_per_person_norm_perc_diff_prev',
     'share_bonusses_trn',
     'top1_client_trn_diff_prev',
-    'share_loyal_trn'
-
+    'share_loyal_trn',
     # LOF precision@100 = 0.11, precision@50 = 0.16
     # 'trn_per_person_norm',
     # 'top1_client_trn',
@@ -108,9 +107,72 @@ WAITER_WEEK_FEATURES_LOF = [
     # 'trn_per_person_norm_diff_next',
     # 'bonusses_used_norm_l'
 ]
-WAITER_WEEK_FEATURES = [
 
-]
+# Default feature sets per algorithm (override via ``features_by_model`` or ``waiter_features``).
+WAITER_WEEK_FEATURES_BY_MODEL: Dict[str, list] = {
+    "iso": list(WAITER_WEEK_FEATURES_ISO),
+    "ocsvm": list(WAITER_WEEK_FEATURES_OCSVM),
+    "lof": list(WAITER_WEEK_FEATURES_LOF),
+}
+
+_MODEL_KEYS: Tuple[str, ...] = ("iso", "ocsvm", "lof")
+
+
+def _resolve_features_by_model(
+    features_by_model: Optional[Mapping[str, Sequence[str]]],
+    waiter_features: Optional[Sequence[str]],
+) -> Dict[str, list]:
+    if features_by_model is not None and waiter_features is not None:
+        raise ValueError("Pass either features_by_model or waiter_features, not both.")
+    if waiter_features is not None:
+        wf = list(waiter_features)
+        return {k: list(wf) for k in _MODEL_KEYS}
+    if features_by_model is None:
+        return {k: list(v) for k, v in WAITER_WEEK_FEATURES_BY_MODEL.items()}
+    out = {k: list(v) for k, v in WAITER_WEEK_FEATURES_BY_MODEL.items()}
+    for k, v in features_by_model.items():
+        if k not in out:
+            raise ValueError(f"Unknown model key {k!r}; expected one of {list(_MODEL_KEYS)}")
+        out[k] = list(v)
+    return out
+
+
+def _scale_per_model(
+    waiter_week_data: pd.DataFrame,
+    features_by_model: Mapping[str, Sequence[str]],
+    exclude_fraud_from_training: bool,
+    y_fraud: np.ndarray,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Dict[str, pd.DataFrame]]:
+    train_mask = y_fraud == 0
+    fit_subset = waiter_week_data.loc[train_mask] if exclude_fraud_from_training else None
+    X_fit: Dict[str, np.ndarray] = {}
+    X_eval: Dict[str, np.ndarray] = {}
+    X_out: Dict[str, pd.DataFrame] = {}
+
+    for key in _MODEL_KEYS:
+        feats = list(features_by_model[key])
+        if exclude_fraud_from_training:
+            X_fit_df, X_eval_df = scale_features(
+                data=waiter_week_data,
+                features=feats,
+                scaler_type="standard",
+                fit_data=fit_subset,
+            )
+            X_fit[key] = np.asarray(X_fit_df.values, dtype=np.float64)
+            X_eval[key] = np.asarray(X_eval_df.values, dtype=np.float64)
+        else:
+            X_full = scale_features(
+                data=waiter_week_data,
+                features=feats,
+                scaler_type="standard",
+            )
+            arr = np.asarray(X_full.values, dtype=np.float64)
+            X_fit[key] = arr
+            X_eval[key] = arr
+        X_out[key] = pd.DataFrame(
+            X_eval[key], index=waiter_week_data.index, columns=feats
+        )
+    return X_fit, X_eval, X_out
 def _waiter_id_week_for_csv(waiter_week_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     """Resolve waiter_id and week columns, or derive week from index + waiter_id (see parquet pipeline)."""
     idx = waiter_week_data.index
@@ -162,7 +224,8 @@ def _write_waiter_week_scores_csv(
 
 
 def compare_waiter_week_models(
-    waiter_features: Sequence[str] = WAITER_WEEK_FEATURES,
+    features_by_model: Optional[Mapping[str, Sequence[str]]] = None,
+    waiter_features: Optional[Sequence[str]] = None,
     agg_data: Optional[pd.DataFrame] = None,
     fraud_waiter_week_ids: Optional[Union[Sequence, np.ndarray]] = None,
     min_num_of_trn: int = 8,
@@ -177,15 +240,19 @@ def compare_waiter_week_models(
 
     Parameters
     ----------
+    features_by_model : optional dict with keys 'iso', 'ocsvm', 'lof' and feature name
+        lists per model. Omitted keys fall back to ``WAITER_WEEK_FEATURES_BY_MODEL``.
+    waiter_features : optional single feature list used for all three models (mutually
+        exclusive with ``features_by_model``).
     agg_data : optional pre-built DataFrame (e.g. filtered). Must include waiter_week
-    column or index, feature columns, and is_fraud unless fraud_waiter_week_ids given.
+        column or index, feature columns, and is_fraud unless fraud_waiter_week_ids given.
     fraud_waiter_week_ids : optional index keys for known fraud rows; if None, uses is_fraud.
     min_num_of_trn : keep rows with num_of_trn >= this (after load), default 8 as in notebook.
     scores_csv_path : if set, write waiter_week × model anomaly scores to this CSV path.
 
     Returns
     -------
-    results_df, predictions, waiter_week_data, X_out, scores
+    results_df, predictions, waiter_week_data, X_out_by_model, scores
     """
 
     if agg_data is None:
@@ -196,7 +263,9 @@ def compare_waiter_week_models(
     else:
         waiter_week_data = agg_data.copy()
 
-    missing = [c for c in waiter_features if c not in waiter_week_data.columns]
+    resolved = _resolve_features_by_model(features_by_model, waiter_features)
+    all_feats = sorted({c for feats in resolved.values() for c in feats})
+    missing = [c for c in all_feats if c not in waiter_week_data.columns]
     if missing:
         raise ValueError(f"Missing feature columns: {missing}")
 
@@ -215,29 +284,21 @@ def compare_waiter_week_models(
 
     if exclude_fraud_from_training:
         train_mask = y_fraud == 0
-        fit_subset = waiter_week_data.loc[train_mask]
-        X_fit_df, X_eval_df = scale_features(
-            data=waiter_week_data,
-            features=waiter_features,
-            scaler_type="standard",
-            fit_data=fit_subset,
-        )
-        X_fit = X_fit_df.values
-        X_eval = X_eval_df.values
         n_train = int(train_mask.sum())
     else:
-        X_full = scale_features(
-            data=waiter_week_data,
-            features=waiter_features,
-            scaler_type="standard",
-        )
-        X_fit = X_eval = np.asarray(X_full.values, dtype=np.float64)
         n_train = n_total
 
-    results_df, predictions, scores = fit_and_evaluate(
+    X_fit, X_eval, X_out_by_model = _scale_per_model(
+        waiter_week_data,
+        resolved,
+        exclude_fraud_from_training=exclude_fraud_from_training,
+        y_fraud=y_fraud,
+    )
+
+    results_df, predictions, scores = fit_and_evaluate_per_model(
         X_fit,
+        X_eval,
         y_fraud,
-        X_eval=X_eval
     )
 
     print("=" * 60)
@@ -248,7 +309,8 @@ def compare_waiter_week_models(
         print(f"Training on non-fraud only: {n_train} samples")
     else:
         print("Training on full data (fraud included in training)")
-    print(f"Features ({len(waiter_features)}): {waiter_features}")
+    for key in _MODEL_KEYS:
+        print(f"Features {key.upper()} ({len(resolved[key])}): {resolved[key]}")
     print(f"Filter: num_of_trn >= {min_num_of_trn}")
     print()
     print(results_df.to_string(index=False))
@@ -281,12 +343,12 @@ def compare_waiter_week_models(
         _write_waiter_week_scores_csv(waiter_week_data, scores, scores_csv_path)
         print(f"Per–waiter-week anomaly scores saved to {scores_csv_path}")
 
-    X_out = pd.DataFrame(X_eval, index=waiter_week_data.index, columns=waiter_features)
-    return results_df, predictions, waiter_week_data, X_out, scores
+    return results_df, predictions, waiter_week_data, X_out_by_model, scores
 
 
 def compare_waiter_week_real_vs_synthetic(
-    waiter_features: Sequence[str] = WAITER_WEEK_FEATURES,
+    features_by_model: Optional[Mapping[str, Sequence[str]]] = None,
+    waiter_features: Optional[Sequence[str]] = None,
     agg_data: Optional[pd.DataFrame] = None,
     fraud_waiter_week_ids: Optional[Union[Sequence, np.ndarray]] = None,
     min_num_of_trn: int = 8,
@@ -310,7 +372,9 @@ def compare_waiter_week_real_vs_synthetic(
     else:
         waiter_week_data = agg_data.copy()
 
-    missing = [c for c in waiter_features if c not in waiter_week_data.columns]
+    resolved = _resolve_features_by_model(features_by_model, waiter_features)
+    all_feats = sorted({c for feats in resolved.values() for c in feats})
+    missing = [c for c in all_feats if c not in waiter_week_data.columns]
     if missing:
         raise ValueError(f"Missing feature columns: {missing}")
 
@@ -331,18 +395,16 @@ def compare_waiter_week_real_vs_synthetic(
     waiter_week_data = waiter_week_data.copy()
     waiter_week_data["is_fraud"] = y_fraud.astype(int)
 
-    train_mask = y_fraud == 0
-    train_data = waiter_week_data.loc[train_mask]
-    X_fit_real, X_eval_real = scale_features(
-        data=waiter_week_data,
-        features=waiter_features,
-        scaler_type="standard",
-        fit_data=train_data,
+    X_fit_real, X_eval_real, _ = _scale_per_model(
+        waiter_week_data,
+        resolved,
+        exclude_fraud_from_training=True,
+        y_fraud=y_fraud,
     )
-    results_real, _, scores_real = fit_and_evaluate(
-        X_fit_real.values,
+    results_real, _, scores_real = fit_and_evaluate_per_model(
+        X_fit_real,
+        X_eval_real,
         y_fraud,
-        X_eval=X_eval_real.values,
     )
     results_real.insert(0, "dataset", "Real")
 
@@ -354,17 +416,16 @@ def compare_waiter_week_real_vs_synthetic(
     )
     y_synt = synthetic["is_fraud"].astype(int).values
     n_fraud_synt = int(y_synt.sum())
-    train_synt = synthetic[synthetic["is_fraud"] == 0]
-    X_fit_synt, X_eval_synt = scale_features(
-        data=synthetic,
-        features=waiter_features,
-        scaler_type="standard",
-        fit_data=train_synt,
+    X_fit_synt, X_eval_synt, _ = _scale_per_model(
+        synthetic,
+        resolved,
+        exclude_fraud_from_training=True,
+        y_fraud=y_synt,
     )
-    results_synt, _, scores_synt = fit_and_evaluate(
-        X_fit_synt.values,
+    results_synt, _, scores_synt = fit_and_evaluate_per_model(
+        X_fit_synt,
+        X_eval_synt,
         y_synt,
-        X_eval=X_eval_synt.values,
     )
     results_synt.insert(0, "dataset", "Synthetic")
 
@@ -373,7 +434,8 @@ def compare_waiter_week_real_vs_synthetic(
     print("=" * 70)
     print(f"Real:      n_total={len(waiter_week_data)}, n_fraud={n_fraud_real}")
     print(f"Synthetic: n_total={len(synthetic)}, n_fraud={n_fraud_synt}")
-    print(f"Features ({len(waiter_features)}): num_of_trn >= {min_num_of_trn}")
+    print(f"Features per model (iso / ocsvm / lof): {len(resolved['iso'])}, {len(resolved['ocsvm'])}, {len(resolved['lof'])}")
+    print(f"Filter: num_of_trn >= {min_num_of_trn}")
     print()
     combined = pd.concat([results_real, results_synt], ignore_index=True)
     print(combined.to_string(index=False))
