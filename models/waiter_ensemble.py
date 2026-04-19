@@ -62,26 +62,37 @@ WAITER_UNIFIED_FEATURES = [
     "month_n_top5pct",
 ]
 
-# Fusion-sig: weights for each sub-signal (higher → more trusted).
-# Card iso/ocsvm: proven best at card level; week/month iso best at those levels.
+# Fusion-sig: weights proportional to actual precision@100 per model per granularity.
+#
+# Card  (precision@100): IF=0.27, OCSVM=0.23, LOF=0.01
+# Week  (precision@100): LOF=0.14, IF=0.12, OCSVM=0.05
+# Month (precision@100): IF=0.17, LOF=0.13, OCSVM=0.07
+#
+# share_anomaly_weeks_* are binary (contamination-dependent) → half weight of max scores.
+# *_mean scores carry less info than max → half weight of max.
 _SIGNAL_WEIGHTS = {
-    "iso_90":                    3.0,
-    "ocsvm_90":                  2.0,
-    "share_anomaly_weeks_iso":   2.0,
-    "share_anomaly_weeks_ocsvm": 1.0,
-    "share_anomaly_weeks_lof":   0.5,
-    "week_iso_max":              3.0,
-    "week_ocsvm_max":            2.0,
-    "week_lof_max":              1.0,
-    "week_iso_mean":             1.0,
-    "week_ocsvm_mean":           1.0,
-    "week_n_top5pct":            1.0,
-    "month_iso_max":             3.0,
-    "month_ocsvm_max":           2.0,
-    "month_lof_max":             1.0,
-    "month_iso_mean":            1.0,
-    "month_ocsvm_mean":          1.0,
-    "month_n_top5pct":           1.0,
+    # card — IF and OCSVM strong, LOF near-zero
+    "iso_90":                              2.7,
+    "ocsvm_90":                            2.3,
+    "lof_90":                              0.1,
+    "share_active_clients_only_this_waiter": 1.0,
+    "share_anomaly_weeks_iso":             0.6,
+    "share_anomaly_weeks_ocsvm":           0.25,
+    "share_anomaly_weeks_lof":             0.7,
+    # week — LOF best, OCSVM weakest
+    "week_lof_max":                        1.4,
+    "week_iso_max":                        1.2,
+    "week_ocsvm_max":                      0.5,
+    "week_iso_mean":                       0.6,
+    "week_ocsvm_mean":                     0.25,
+    "week_n_top5pct":                      0.6,
+    # month — IF best, OCSVM weakest
+    "month_iso_max":                       1.7,
+    "month_lof_max":                       1.3,
+    "month_ocsvm_max":                     0.7,
+    "month_iso_mean":                      0.85,
+    "month_ocsvm_mean":                    0.35,
+    "month_n_top5pct":                     0.85,
 }
 from waiter_month_models import WAITER_MONTH_FEATURES_ISO, WAITER_MONTH_FEATURES_OCSVM, WAITER_MONTH_FEATURES_LOF
 from waiter_week_models import WAITER_WEEK_FEATURES_ISO, WAITER_WEEK_FEATURES_OCSVM, WAITER_WEEK_FEATURES_LOF
