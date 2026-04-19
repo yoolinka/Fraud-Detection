@@ -16,7 +16,7 @@ if _project_root not in sys.path:
 
 from config import load_data, FEATURES
 
-df, client_data, waiter_week_data, waiter_level_data = load_data()
+df, client_data, waiter_week_data, waiter_month_data, waiter_level_data = load_data()
 
 _RATE_BOUNDS_ATOL = 1e-8
 

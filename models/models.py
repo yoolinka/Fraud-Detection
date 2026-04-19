@@ -115,7 +115,7 @@ def compare_models(
     If scores_csv_path is set, writes person_id and the three anomaly scores to CSV (standard scaler when
     compare_scalers=True, same scores as the distribution plot).
     """
-    _, client_data, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    _, client_data, _, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     y_fraud = client_data["is_fraud"].astype(int).values
     n_fraud = y_fraud.sum()
     n_total = len(client_data)
@@ -274,7 +274,7 @@ def compare_real_vs_synthetic(
     run the same three models on both with training on non-fraud only.
     Returns (results_real, results_synthetic, client_data_real, client_data_synthetic).
     """
-    _, client_data, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    _, client_data, _, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     client_data = client_data[client_data["num_of_trn"] > activity_state]
     if "is_fraud" not in client_data.columns:
         client_data["is_fraud"] = client_data.index.isin(FRAUD_IDS).astype(int)

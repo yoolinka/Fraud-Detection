@@ -256,7 +256,7 @@ def compare_waiter_week_models(
     """
 
     if agg_data is None:
-        _, _, waiter_week_data, _ = load_data(
+        _, _, waiter_week_data, _, _ = load_data(
             num_of_trn=num_of_trn,
             place_num_of_waiters=place_num_of_waiters,
         )
@@ -365,7 +365,7 @@ def compare_waiter_week_real_vs_synthetic(
     Mirrors ``compare_real_vs_synthetic`` in ``models.py``.
     """
     if agg_data is None:
-        _, _, waiter_week_data, _ = load_data(
+        _, _, waiter_week_data, _, _ = load_data(
             num_of_trn=num_of_trn,
             place_num_of_waiters=place_num_of_waiters,
         )

@@ -60,7 +60,7 @@ def compare_waiter_models(
     then run Isolation Forest, One-Class SVM, and LOF on waiters. Print same metrics as models.py:
     hit_rate, recall@k, precision@k, n_anomalies, pct_flagged, time_sec.
     """
-    df, client_data, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    df, client_data, _, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
     if "top_waiter_id" not in client_data.columns:
         raise ValueError("client_data must contain 'top_waiter_id' (from client_level_features)")
 
@@ -92,7 +92,7 @@ def compare_waiter_models(
 
     # --- Build waiter-level data and filter by working_days ---
     if waiter_data is None:
-        _, _, _, waiter_data = load_data(
+        _, _, _, _, waiter_data = load_data(
             activity_state=activity_state,
             days_visits=days_visits,
             total_num_of_trn=total_num_of_trn,
