@@ -99,7 +99,7 @@ from waiter_week_models import WAITER_WEEK_FEATURES_ISO, WAITER_WEEK_FEATURES_OC
 # Week / month feature sets for the per-granularity models (from tuned waiter_week/month_models).
 # fmt: on
 
-TOP_K_LIST = [5, 10, 14, 20, 50]  # 14 = total known fraud waiters
+TOP_K_LIST = [5, 10, 20, 50]  # 14 = total known fraud waiters
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ def _run_week_model(
         X_eval[key] = eval_df.values.astype(np.float64)
 
     _, _, scores = fit_and_evaluate_per_model(
-        X_fit, X_eval, y_week, n_neighbors=n_neighbors, n_estimators=n_estimators
+        X_fit, X_eval, y_week, n_neighbors=5, n_estimators=100
     )
     return scores
 
@@ -217,7 +217,7 @@ def _run_month_model(
         X_eval[key] = eval_df.values.astype(np.float64)
 
     _, _, scores = fit_and_evaluate_per_model(
-        X_fit, X_eval, y_month, n_neighbors=n_neighbors, n_estimators=n_estimators
+        X_fit, X_eval, y_month, n_neighbors=20, n_estimators=500
     )
     return scores
 
@@ -355,8 +355,11 @@ def compare_waiter_ensemble(
     _, client_data, waiter_week_data, waiter_month_data, waiter_data = load_data(
         activity_state=activity_state,
         days_visits=days_visits,
-        min_working_days=min_working_days,
         total_num_of_trn=8,
+
+        num_of_trn = 8,
+        min_working_days=5,
+        place_num_of_waiters = 2
     )
 
     # --- filters ---
@@ -454,10 +457,10 @@ def _print_results(
     print()
     print(metrics_df.to_string(index=False))
     print()
-    print(f"Top-{top_n} risk ranking (by Fusion-sig):")
+    print(f"Top-{top_n} risk ranking (by OCSVM (unified)):")
     print("-" * 70)
     cols = ["ensemble_rank", "waiter_id", "is_fraud", "score_fusion_sig", "score_fusion2", "score_if", "score_ocsvm"]
-    print(risk_df[cols].head(top_n).to_string(index=False))
+    print(risk_df[cols].sort_values("score_ocsvm", ascending=False).head(top_n).to_string(index=False))
     print()
     n_fraud_in_top = int(risk_df.head(top_n)["is_fraud"].sum())
     print(f"Fraud in top-{top_n}: {n_fraud_in_top} / {n_fraud}  "

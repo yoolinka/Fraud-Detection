@@ -1,0 +1,490 @@
+"""
+Compare Isolation Forest, One-Class SVM, and LOF on waiter–month level features
+(waiter_month_features.parquet)
+"""
+import os
+import sys
+import warnings
+from typing import Dict, Mapping, Optional, Sequence, Tuple, Union
+
+import numpy as np
+import pandas as pd
+
+warnings.filterwarnings("ignore")
+
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.abspath(os.path.join(_script_dir, ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+from config import DATA_PATH, load_data
+from parquet.fraud_ids import FRAUD_WAITER_IDS
+
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location("scaling", os.path.join(_script_dir, "scaling.py"))
+_scaling = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_scaling)
+scale_features = _scaling.scale_features
+
+_client_models_spec = importlib.util.spec_from_file_location(
+    "client_models", os.path.join(_script_dir, "models.py")
+)
+_client_models = importlib.util.module_from_spec(_client_models_spec)
+_client_models_spec.loader.exec_module(_client_models)
+
+from fit_and_evaluate import fit_and_evaluate_per_model
+from synt_data_generation import generate_synthetic_data
+
+# Same feature sets as waiter_week_models (column names match monthly aggregates).
+WAITER_MONTH_FEATURES_ISO = [
+    'top1_client_trn', 
+    'mean_check'
+    # "trn_per_person_norm",
+    # "top1_client_trn",
+    # "bonusses_accum",
+    # "trn_per_person",
+    # "top1_client_share_norm",
+    # "top1_client_trn_diff_next",
+    # "top1_client_trn_diff_prev",
+    # "mean_check",
+    # "bonusses_used",
+    # "top1_client_trn_perc_diff_next",
+]
+WAITER_MONTH_FEATURES_OCSVM = [
+    'top1_client_trn', 
+    'top1_client_share_norm', 
+    'trn_per_person_norm', 
+    'share_loyal_trn'
+    # "trn_per_person_norm",
+    # "trn_per_person_perc_diff_next",
+    # "top1_client_share_norm",
+    # "bonusses_accum_diff_prev",
+    # "share_loyal_trn",
+]
+WAITER_MONTH_FEATURES_LOF = [
+    # "trn_per_day_norm",
+    # "bonusses_accum_diff_next",
+    # "trn_per_person_perc_diff_next",
+    # "trn_per_person_norm_perc_diff_next",
+    # "trn_per_person",
+    # "unique_persons_diff_next",
+    # "trn_per_person_norm",
+    # "bonusses_accum",
+    # "mean_check",
+    # "top1_client_share_norm",
+    # "unique_clients_per_day",
+    # "unique_clients_per_day_diff_prev",
+    # "top1_client_trn_diff_next",
+    # "bonusses_trn",
+    # "unique_clients_per_day_perc_diff_prev",
+    # "trn_per_person_norm_perc_diff_prev",
+    # "share_bonusses_trn",
+    # "top1_client_trn_diff_prev",
+    # "share_loyal_trn",
+    'trn_per_person', 
+    'trn_per_person_norm', 
+    'trn_per_person_norm_diff_next', 
+    'share_of_trn_diff_prev', 
+    'share_bonusses_trn_perc_diff_prev', 
+    'trn_per_person_perc_diff_prev', 
+    'top1_client_trn_diff_prev', 
+    'top1_client_share', 
+    'share_of_trn', 
+    'bonusses_accum', 
+    'mean_check', 
+    'share_loyal_trn'
+]
+
+WAITER_MONTH_FEATURES_BY_MODEL: Dict[str, list] = {
+    "iso": list(WAITER_MONTH_FEATURES_ISO),
+    "ocsvm": list(WAITER_MONTH_FEATURES_OCSVM),
+    "lof": list(WAITER_MONTH_FEATURES_LOF),
+}
+
+_MODEL_KEYS: Tuple[str, ...] = ("iso", "ocsvm", "lof")
+
+def _resolve_features_by_model(
+    features_by_model: Optional[Mapping[str, Sequence[str]]],
+    waiter_features: Optional[Sequence[str]],
+) -> Dict[str, list]:
+    if features_by_model is not None and waiter_features is not None:
+        raise ValueError("Pass either features_by_model or waiter_features, not both.")
+    if waiter_features is not None:
+        wf = list(waiter_features)
+        return {k: list(wf) for k in _MODEL_KEYS}
+    if features_by_model is None:
+        return {k: list(v) for k, v in WAITER_MONTH_FEATURES_BY_MODEL.items()}
+    out = {k: list(v) for k, v in WAITER_MONTH_FEATURES_BY_MODEL.items()}
+    for k, v in features_by_model.items():
+        if k not in out:
+            raise ValueError(f"Unknown model key {k!r}; expected one of {list(_MODEL_KEYS)}")
+        out[k] = list(v)
+    return out
+
+
+def _scale_per_model(
+    waiter_month_data: pd.DataFrame,
+    features_by_model: Mapping[str, Sequence[str]],
+    exclude_fraud_from_training: bool,
+    y_fraud: np.ndarray,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Dict[str, pd.DataFrame]]:
+    train_mask = y_fraud == 0
+    fit_subset = waiter_month_data.loc[train_mask] if exclude_fraud_from_training else None
+    X_fit: Dict[str, np.ndarray] = {}
+    X_eval: Dict[str, np.ndarray] = {}
+    X_out: Dict[str, pd.DataFrame] = {}
+
+    for key in _MODEL_KEYS:
+        feats = list(features_by_model[key])
+        if exclude_fraud_from_training:
+            X_fit_df, X_eval_df = scale_features(
+                data=waiter_month_data,
+                features=feats,
+                scaler_type="standard",
+                fit_data=fit_subset,
+            )
+            X_fit[key] = np.asarray(X_fit_df.values, dtype=np.float64)
+            X_eval[key] = np.asarray(X_eval_df.values, dtype=np.float64)
+        else:
+            X_full = scale_features(
+                data=waiter_month_data,
+                features=feats,
+                scaler_type="standard",
+            )
+            arr = np.asarray(X_full.values, dtype=np.float64)
+            X_fit[key] = arr
+            X_eval[key] = arr
+        X_out[key] = pd.DataFrame(
+            X_eval[key], index=waiter_month_data.index, columns=feats
+        )
+    return X_fit, X_eval, X_out
+
+
+def _waiter_id_month_for_csv(waiter_month_data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    """Resolve waiter_id and month columns, or derive month from index + waiter_id."""
+    idx = waiter_month_data.index
+    n = len(waiter_month_data)
+    if "waiter_id" in waiter_month_data.columns:
+        waiter_id = waiter_month_data["waiter_id"].to_numpy()
+        if "month" in waiter_month_data.columns:
+            month = waiter_month_data["month"].to_numpy()
+        else:
+            month = np.empty(n, dtype=object)
+            for i in range(n):
+                wm = str(idx[i])
+                p = str(waiter_id[i]) + "_"
+                month[i] = wm[len(p) :] if wm.startswith(p) else np.nan
+    else:
+        waiter_id = np.empty(n, dtype=object)
+        month = np.empty(n, dtype=object)
+        for i in range(n):
+            wm = str(idx[i])
+            parts = wm.rsplit("_", 1)
+            if len(parts) == 2:
+                waiter_id[i], month[i] = parts[0], parts[1]
+            else:
+                waiter_id[i], month[i] = wm, np.nan
+    return waiter_id, month
+
+
+def _write_waiter_month_scores_csv(
+    waiter_month_data: pd.DataFrame,
+    scores: dict,
+    path: str,
+) -> None:
+    """Write one row per waiter_month with IF / OCSVM / LOF anomaly scores (higher = more anomalous)."""
+    waiter_id, month = _waiter_id_month_for_csv(waiter_month_data)
+    out = pd.DataFrame(
+        {
+            "waiter_month": waiter_month_data.index,
+            "waiter_id": waiter_id,
+            "month": month,
+            "iso_score": np.asarray(scores["iso"], dtype=np.float64),
+            "ocsvm_score": np.asarray(scores["ocsvm"], dtype=np.float64),
+            "lof_score": np.asarray(scores["lof"], dtype=np.float64),
+        }
+    )
+    d = os.path.dirname(os.path.abspath(path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    out.to_csv(path, index=False)
+
+
+def compare_waiter_month_models(
+    features_by_model: Optional[Mapping[str, Sequence[str]]] = None,
+    waiter_features: Optional[Sequence[str]] = None,
+    agg_data: Optional[pd.DataFrame] = None,
+    fraud_waiter_month_ids: Optional[Union[Sequence, np.ndarray]] = None,
+    min_num_of_trn: int = 8,
+    exclude_fraud_from_training: bool = True,
+    num_of_trn: int = 1,
+    place_num_of_waiters: int = 1,
+    min_working_days: int = 2,
+    plot_scores_path: Optional[str] = None,
+    scores_csv_path: Optional[str] = None,
+):
+    """
+    Load or accept waiter–month aggregates, scale, fit IF / OCSVM / LOF, print metrics.
+
+    Parameters
+    ----------
+    features_by_model : optional dict with keys 'iso', 'ocsvm', 'lof' and feature name
+        lists per model. Omitted keys fall back to ``WAITER_MONTH_FEATURES_BY_MODEL``.
+    waiter_features : optional single feature list used for all three models (mutually
+        exclusive with ``features_by_model``).
+    agg_data : optional pre-built DataFrame (e.g. filtered). Must include waiter_month
+        column or index, feature columns, and is_fraud unless fraud_waiter_month_ids given.
+    fraud_waiter_month_ids : optional index keys for known fraud rows; if None, uses is_fraud.
+    min_num_of_trn : keep rows with num_of_trn >= this (after load), default 8 as in notebook.
+    scores_csv_path : if set, write waiter_month × model anomaly scores to this CSV path.
+
+    Returns
+    -------
+    results_df, predictions, waiter_month_data, X_out_by_model, scores
+    """
+
+    if agg_data is None:
+        _, _, _, waiter_month_data, _ = load_data(num_of_trn=num_of_trn, place_num_of_waiters=place_num_of_waiters, min_working_days=min_working_days)
+    else:
+        waiter_month_data = agg_data.copy()
+        if waiter_month_data.index.name != "waiter_month" and "waiter_month" in waiter_month_data.columns:
+            waiter_month_data = waiter_month_data.set_index("waiter_month")
+
+    resolved = _resolve_features_by_model(features_by_model, waiter_features)
+    all_feats = sorted({c for feats in resolved.values() for c in feats})
+    missing = [c for c in all_feats if c not in waiter_month_data.columns]
+    if missing:
+        raise ValueError(f"Missing feature columns: {missing}")
+
+    waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn].copy()
+
+    if fraud_waiter_month_ids is not None:
+        ids = set(fraud_waiter_month_ids)
+        y_fraud = waiter_month_data.index.isin(ids).astype(int).values
+    elif "is_fraud" in waiter_month_data.columns:
+        y_fraud = waiter_month_data["is_fraud"].astype(int).values
+    else:
+        raise ValueError("Provide fraud_waiter_month_ids or an is_fraud column on agg_data")
+
+    n_fraud = int(y_fraud.sum())
+    n_total = len(waiter_month_data)
+
+    if exclude_fraud_from_training:
+        train_mask = y_fraud == 0
+        n_train = int(train_mask.sum())
+    else:
+        n_train = n_total
+
+    X_fit, X_eval, X_out_by_model = _scale_per_model(
+        waiter_month_data,
+        resolved,
+        exclude_fraud_from_training=exclude_fraud_from_training,
+        y_fraud=y_fraud,
+    )
+
+    results_df, predictions, scores = fit_and_evaluate_per_model(
+        X_fit,
+        X_eval,
+        y_fraud,
+        n_neighbors=20,
+        n_estimators=500,
+    )
+
+    print("=" * 60)
+    print("Waiter–month anomaly detection — model comparison")
+    print("=" * 60)
+    print(
+        f"Samples (total): {n_total}  |  Known fraud waiter-months: {n_fraud}  | Known fraud waiters: {len(FRAUD_WAITER_IDS)}"
+    )
+    if exclude_fraud_from_training:
+        print(f"Training on non-fraud only: {n_train} samples")
+    else:
+        print("Training on full data (fraud included in training)")
+    for key in _MODEL_KEYS:
+        print(f"Features {key.upper()} ({len(resolved[key])}): {resolved[key]}")
+    print(f"Filter: num_of_trn >= {min_num_of_trn}")
+    print()
+    print(results_df.to_string(index=False))
+    print()
+    print("Metrics:")
+    print("  - n_anomalies: rows flagged as anomaly (-1)")
+    print("  - pct_flagged: percentage of all rows flagged")
+    print("  - fraud_hit_rate: fraction of known frauds flagged as anomaly")
+    print("  - recall@k / precision@k: top-k by anomaly score (k=10,20,50,100)")
+    print("  - time_sec: fit+predict time in seconds")
+    print()
+
+    if plot_scores_path:
+        _client_models._plot_anomaly_score_distributions(scores, y_fraud, plot_scores_path)
+        print(f"Anomaly score distributions saved to {plot_scores_path}")
+
+    if scores_csv_path:
+        _write_waiter_month_scores_csv(waiter_month_data, scores, scores_csv_path)
+        print(f"Per–waiter-month anomaly scores saved to {scores_csv_path}")
+
+    return results_df, predictions, waiter_month_data, X_out_by_model, scores
+
+
+def compare_waiter_month_real_vs_synthetic(
+    features_by_model: Optional[Mapping[str, Sequence[str]]] = None,
+    waiter_features: Optional[Sequence[str]] = None,
+    agg_data: Optional[pd.DataFrame] = None,
+    fraud_waiter_month_ids: Optional[Union[Sequence, np.ndarray]] = None,
+    min_num_of_trn: int = 8,
+    num_of_trn: int = 1,
+    place_num_of_waiters: int = 1,
+    min_working_days: int = 2,
+    n_synthetic: int = 500,
+    noise_scale: float = 0.1,
+    random_state: int = 42,
+    plot_scores_path: Optional[str] = None,
+) -> tuple:
+    """
+    Run IF / OCSVM / LOF on real waiter–month data and on a synthetic dataset
+    (non-fraud rows + noisy resamples of real fraud), training on non-fraud only.
+    Mirrors ``compare_waiter_week_real_vs_synthetic`` in ``waiter_week_models.py``.
+    """
+    if agg_data is None:
+        waiter_month_data = _load_waiter_month_data(
+            num_of_trn=num_of_trn,
+            place_num_of_waiters=place_num_of_waiters,
+            min_working_days=min_working_days,
+        )
+    else:
+        waiter_month_data = agg_data.copy()
+        if waiter_month_data.index.name != "waiter_month" and "waiter_month" in waiter_month_data.columns:
+            waiter_month_data = waiter_month_data.set_index("waiter_month")
+
+    resolved = _resolve_features_by_model(features_by_model, waiter_features)
+    all_feats = sorted({c for feats in resolved.values() for c in feats})
+    missing = [c for c in all_feats if c not in waiter_month_data.columns]
+    if missing:
+        raise ValueError(f"Missing feature columns: {missing}")
+
+    waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn].copy()
+
+    if fraud_waiter_month_ids is not None:
+        ids = set(fraud_waiter_month_ids)
+        y_fraud = waiter_month_data.index.isin(ids).astype(int).values
+    elif "is_fraud" in waiter_month_data.columns:
+        y_fraud = waiter_month_data["is_fraud"].astype(int).values
+    else:
+        y_fraud = waiter_month_data.index.isin(FRAUD_WAITER_IDS).astype(int).values
+
+    n_fraud_real = int(y_fraud.sum())
+    if n_fraud_real == 0:
+        raise ValueError("No known fraud waiter-months; cannot build synthetic fraud.")
+
+    waiter_month_data = waiter_month_data.copy()
+    waiter_month_data["is_fraud"] = y_fraud.astype(int)
+
+    X_fit_real, X_eval_real, _ = _scale_per_model(
+        waiter_month_data,
+        resolved,
+        exclude_fraud_from_training=True,
+        y_fraud=y_fraud,
+    )
+    results_real, _, scores_real = fit_and_evaluate_per_model(
+        X_fit_real,
+        X_eval_real,
+        y_fraud,
+        n_neighbors=20,
+        n_estimators=500,
+    )
+    results_real.insert(0, "dataset", "Real")
+
+    synthetic = generate_synthetic_data(
+        waiter_month_data,
+        n_synthetic=n_synthetic,
+        noise_scale=noise_scale,
+        random_state=random_state,
+    )
+    y_synt = synthetic["is_fraud"].astype(int).values
+    n_fraud_synt = int(y_synt.sum())
+    X_fit_synt, X_eval_synt, _ = _scale_per_model(
+        synthetic,
+        resolved,
+        exclude_fraud_from_training=True,
+        y_fraud=y_synt,
+    )
+    results_synt, _, scores_synt = fit_and_evaluate_per_model(
+        X_fit_synt,
+        X_eval_synt,
+        y_synt,
+        n_neighbors=20,
+        n_estimators=500,
+    )
+    results_synt.insert(0, "dataset", "Synthetic")
+
+    print("=" * 70)
+    print("Waiter–month: real vs synthetic — model comparison (train on non-fraud only)")
+    print("=" * 70)
+    print(f"Real:      n_total={len(waiter_month_data)}, n_fraud={n_fraud_real}")
+    print(f"Synthetic: n_total={len(synthetic)}, n_fraud={n_fraud_synt}")
+    print(
+        f"Features per model (iso / ocsvm / lof): {len(resolved['iso'])}, {len(resolved['ocsvm'])}, {len(resolved['lof'])}"
+    )
+    print(f"Filter: num_of_trn >= {min_num_of_trn}")
+    print()
+    combined = pd.concat([results_real, results_synt], ignore_index=True)
+    print(combined.to_string(index=False))
+    print()
+    print(
+        "Metrics: fraud_hit_rate = fraction of known frauds flagged; "
+        "recall@k / precision@k = top-k by score."
+    )
+    if plot_scores_path:
+        base = os.path.join(
+            os.path.dirname(plot_scores_path),
+            os.path.splitext(os.path.basename(plot_scores_path))[0],
+        )
+        real_path = base + "_real.png"
+        synt_path = base + "_synthetic.png"
+        _client_models._plot_anomaly_score_distributions(scores_real, y_fraud, real_path)
+        _client_models._plot_anomaly_score_distributions(scores_synt, y_synt, synt_path)
+        print(f"Anomaly score distributions saved to {real_path}")
+        print(f"Anomaly score distributions saved to {synt_path}")
+
+    return results_real, results_synt, waiter_month_data, synthetic
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Waiter–month anomaly detection: IF, OCSVM, LOF")
+    parser.add_argument("--synthetic", action="store_true", help="Compare real vs synthetic (default: real only)")
+    parser.add_argument("--min-trn", type=int, default=8, help="num_of_trn lower bound (inclusive)")
+    parser.add_argument("--n-synthetic", type=int, default=6000, help="Synthetic fraud samples (with --synthetic)")
+    parser.add_argument("--plot", type=str, default=None, help="Path to save score distribution plot")
+    parser.add_argument(
+        "--scores-csv",
+        type=str,
+        default=None,
+        help="Path for CSV of waiter_month + iso/ocsvm/lof scores (default: waiter_month_anomaly_scores.csv)",
+    )
+    parser.add_argument(
+        "--place-num-of-waiters",
+        type=int,
+        default=2,
+        help="Place num of waiters lower bound (inclusive)",
+    )
+    args = parser.parse_args()
+    default_plot = os.path.join(_project_root, "waiter_month_anomaly_score_distributions.png")
+    default_scores_csv = os.path.join(_project_root, "waiter_month_anomaly_scores.csv")
+    scores_csv = args.scores_csv if args.scores_csv is not None else default_scores_csv
+    if args.synthetic:
+        compare_waiter_month_real_vs_synthetic(
+            min_num_of_trn=args.min_trn,
+            n_synthetic=args.n_synthetic,
+            plot_scores_path=args.plot or default_plot,
+            place_num_of_waiters=args.place_num_of_waiters,
+        )
+    else:
+        compare_waiter_month_models(
+            min_num_of_trn=args.min_trn,
+            exclude_fraud_from_training=True,
+            plot_scores_path=args.plot or default_plot,
+            scores_csv_path=scores_csv,
+            place_num_of_waiters=args.place_num_of_waiters,
+        )
