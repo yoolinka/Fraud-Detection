@@ -36,52 +36,17 @@ _client_models_spec.loader.exec_module(_client_models)
 from fit_and_evaluate import fit_and_evaluate_per_model
 from synt_data_generation import generate_synthetic_data
 
-# Same feature sets as waiter_week_models (column names match monthly aggregates).
 WAITER_MONTH_FEATURES_ISO = [
     'top1_client_trn', 
     'mean_check'
-    # "trn_per_person_norm",
-    # "top1_client_trn",
-    # "bonusses_accum",
-    # "trn_per_person",
-    # "top1_client_share_norm",
-    # "top1_client_trn_diff_next",
-    # "top1_client_trn_diff_prev",
-    # "mean_check",
-    # "bonusses_used",
-    # "top1_client_trn_perc_diff_next",
 ]
 WAITER_MONTH_FEATURES_OCSVM = [
     'top1_client_trn', 
     'top1_client_share_norm', 
     'trn_per_person_norm', 
     'share_loyal_trn'
-    # "trn_per_person_norm",
-    # "trn_per_person_perc_diff_next",
-    # "top1_client_share_norm",
-    # "bonusses_accum_diff_prev",
-    # "share_loyal_trn",
 ]
 WAITER_MONTH_FEATURES_LOF = [
-    # "trn_per_day_norm",
-    # "bonusses_accum_diff_next",
-    # "trn_per_person_perc_diff_next",
-    # "trn_per_person_norm_perc_diff_next",
-    # "trn_per_person",
-    # "unique_persons_diff_next",
-    # "trn_per_person_norm",
-    # "bonusses_accum",
-    # "mean_check",
-    # "top1_client_share_norm",
-    # "unique_clients_per_day",
-    # "unique_clients_per_day_diff_prev",
-    # "top1_client_trn_diff_next",
-    # "bonusses_trn",
-    # "unique_clients_per_day_perc_diff_prev",
-    # "trn_per_person_norm_perc_diff_prev",
-    # "share_bonusses_trn",
-    # "top1_client_trn_diff_prev",
-    # "share_loyal_trn",
     'trn_per_person', 
     'trn_per_person_norm', 
     'trn_per_person_norm_diff_next', 

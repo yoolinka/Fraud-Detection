@@ -37,7 +37,6 @@ from fit_and_evaluate import fit_and_evaluate_per_model
 from synt_data_generation import generate_synthetic_data
 
 WAITER_WEEK_FEATURES_ISO = [
-    # ISO precision@100 = 0.10, precision@50 = 0.18
     'trn_per_person_norm',
     'top1_client_trn',
     'bonusses_accum',
@@ -50,7 +49,6 @@ WAITER_WEEK_FEATURES_ISO = [
     'top1_client_trn_perc_diff_next'
 ]
 WAITER_WEEK_FEATURES_OCSVM = [
-    # OCSVM precision@100 = 0.09, precision@50 = 0.14
     'trn_per_person_norm',
     'trn_per_person_perc_diff_next',
     'top1_client_share_norm',
@@ -58,7 +56,6 @@ WAITER_WEEK_FEATURES_OCSVM = [
     'share_loyal_trn'
 ]
 WAITER_WEEK_FEATURES_LOF = [
-   # LOF precision@100 = 0.12
     'trn_per_day_norm',
     'bonusses_accum_diff_next',
     'trn_per_person_perc_diff_next',
@@ -78,37 +75,8 @@ WAITER_WEEK_FEATURES_LOF = [
     'share_bonusses_trn',
     'top1_client_trn_diff_prev',
     'share_loyal_trn',
-    # LOF precision@100 = 0.11, precision@50 = 0.16
-    # 'trn_per_person_norm',
-    # 'top1_client_trn',
-    # 'top1_client_share',
-    # 'share_loyal_trn',
-    # 'bonusses_accum',
-    # 'trn_per_person',
-    # 'top1_client_share_norm',
-    # 'top1_client_trn_diff_next',
-    # 'top1_client_trn_diff_prev',
-    # 'trn_count_nonloyal_diff_prev',
-    # 'mean_check',
-    # 'bonusses_accum_diff_next',
-    # 'bonusses_used',
-    # 'trn_per_person_diff_prev',
-    # 'trn_count_nonloyal',
-    # 'bonusses_accum_diff_prev',
-    # 'bonusses_trn',
-    # 'trn_per_person_norm_perc_diff_next',
-    # 'share_loyal_trn_perc_diff_next',
-    # 'trn_per_person_perc_diff_prev',
-    # 'unique_clients_per_day_diff_next',
-    # 'share_new_clients_norm_diff_next',
-    # 'share_of_trn_diff_next',
-    # 'unique_clients_per_day',
-    # 'share_new_clients',
-    # 'trn_per_person_norm_diff_next',
-    # 'bonusses_used_norm_l'
 ]
 
-# Default feature sets per algorithm (override via ``features_by_model`` or ``waiter_features``).
 WAITER_WEEK_FEATURES_BY_MODEL: Dict[str, list] = {
     "iso": list(WAITER_WEEK_FEATURES_ISO),
     "ocsvm": list(WAITER_WEEK_FEATURES_OCSVM),
@@ -322,18 +290,6 @@ def compare_waiter_week_models(
     print("  - recall@k / precision@k: top-k by anomaly score (k=10,20,50,100)")
     print("  - time_sec: fit+predict time in seconds")
     print()
-
-    # fraud_index = np.where(y_fraud.astype(bool))[0]
-    # print("Known fraud waiter-weeks — which model flagged them (-1 = anomaly):")
-    # print("-" * 60)
-    # for i in fraud_index:
-    #     wid = waiter_week_data.index[i]
-    #     row = (
-    #         f"  waiter_week={wid}: "
-    #         f"IF={predictions['iso'][i]}, OCSVM={predictions['ocsvm'][i]}, LOF={predictions['lof'][i]}"
-    #     )
-    #     print(row)
-    # print()
 
     if plot_scores_path:
         _client_models._plot_anomaly_score_distributions(scores, y_fraud, plot_scores_path)

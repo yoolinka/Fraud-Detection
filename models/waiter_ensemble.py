@@ -45,31 +45,25 @@ _scaling = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_scaling)
 scale_features = _scaling.scale_features
 
-# fmt: off
-# Unified feature matrix columns (order defines how they appear in the output DataFrame)
 WAITER_UNIFIED_FEATURES = [
-    # --- card-level signals (from waiter_level_data, precomputed) ---
-    "iso_90", "ocsvm_90", "lof_90",
+    # --- card-level signals ---
+    "iso_90", "ocsvm_90",
     "share_active_clients_only_this_waiter",
-    "share_anomaly_weeks_iso", "share_anomaly_weeks_ocsvm", "share_anomaly_weeks_lof",
-    # --- waiter-week signals (aggregated from fresh model run) ---
-    "week_iso_max", "week_ocsvm_max", "week_lof_max",
-    "week_iso_mean", "week_ocsvm_mean",
-    "week_n_top5pct",
-    # --- waiter-month signals (aggregated from fresh model run) ---
-    "month_iso_max", "month_ocsvm_max", "month_lof_max",
-    "month_iso_mean", "month_ocsvm_mean",
+    # --- waiter-month signals ---
+    "month_iso_max", 
+    "month_ocsvm_max", 
+    "month_lof_max",
+    "month_iso_mean", 
+    "month_ocsvm_mean",
     "month_n_top5pct",
 ]
 
-# Fusion-sig: weights proportional to actual precision@100 per model per granularity.
-#
-# Card  (precision@100): IF=0.27, OCSVM=0.23, LOF=0.01
-# Week  (precision@100): LOF=0.14, IF=0.12, OCSVM=0.05
-# Month (precision@100): IF=0.17, LOF=0.13, OCSVM=0.07
-#
-# share_anomaly_weeks_* are binary (contamination-dependent) → half weight of max scores.
-# *_mean scores carry less info than max → half weight of max.
+_LOF_FEATURES_ALL = {"lof_90", "share_anomaly_weeks_lof", "week_lof_max", "month_lof_max"}
+_LOF_FEATURES_CARD_ONLY = {"lof_90"}
+_SHARE_ANOMALY_WEEKS = {"share_anomaly_weeks_iso", "share_anomaly_weeks_ocsvm", "share_anomaly_weeks_lof"}
+WAITER_UNIFIED_FEATURES_NO_LOF = [f for f in WAITER_UNIFIED_FEATURES if f not in _LOF_FEATURES_ALL]
+WAITER_UNIFIED_FEATURES_SMART = [f for f in WAITER_UNIFIED_FEATURES if f not in _LOF_FEATURES_CARD_ONLY]
+
 _SIGNAL_WEIGHTS = {
     # card — IF and OCSVM strong, LOF near-zero
     "iso_90":                              2.7,
@@ -96,15 +90,8 @@ _SIGNAL_WEIGHTS = {
 }
 from waiter_month_models import WAITER_MONTH_FEATURES_ISO, WAITER_MONTH_FEATURES_OCSVM, WAITER_MONTH_FEATURES_LOF
 from waiter_week_models import WAITER_WEEK_FEATURES_ISO, WAITER_WEEK_FEATURES_OCSVM, WAITER_WEEK_FEATURES_LOF
-# Week / month feature sets for the per-granularity models (from tuned waiter_week/month_models).
-# fmt: on
 
-TOP_K_LIST = [5, 10, 20, 50]  # 14 = total known fraud waiters
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+TOP_K_LIST = [5, 10, 14, 20, 50]
 
 def _rank(arr: np.ndarray) -> np.ndarray:
     """Percentile rank in [0, 1]; higher = more anomalous."""
@@ -135,11 +122,6 @@ def _metrics_row(name: str, score: np.ndarray, y_true: np.ndarray) -> dict:
     row.update(_top_k_recall(score, y_true, TOP_K_LIST))
     row.update(_top_k_precision(score, y_true, TOP_K_LIST))
     return row
-
-
-# ---------------------------------------------------------------------------
-# Step 1: week-level signals → aggregate per waiter
-# ---------------------------------------------------------------------------
 
 def _run_week_model(
     waiter_week_data: pd.DataFrame,
@@ -193,11 +175,6 @@ def _aggregate_week_signals(waiter_week_data: pd.DataFrame, scores: dict) -> pd.
     )
     return result
 
-
-# ---------------------------------------------------------------------------
-# Step 2: month-level signals → aggregate per waiter
-# ---------------------------------------------------------------------------
-
 def _run_month_model(
     waiter_month_data: pd.DataFrame,
     y_month: np.ndarray,
@@ -248,11 +225,6 @@ def _aggregate_month_signals(waiter_month_data: pd.DataFrame, scores: dict) -> p
     )
     return result
 
-
-# ---------------------------------------------------------------------------
-# Step 3: build unified feature matrix
-# ---------------------------------------------------------------------------
-
 def _build_unified(
     waiter_data: pd.DataFrame,
     week_agg: pd.DataFrame,
@@ -268,20 +240,13 @@ def _build_unified(
     unified = unified.join(week_agg, how="left")
     unified = unified.join(month_agg, how="left")
 
-    # Waiters with no matching weeks/months get 0 (no anomalous signal)
     week_cols = week_agg.columns.tolist()
     month_cols = month_agg.columns.tolist()
     unified[week_cols] = unified[week_cols].fillna(0)
     unified[month_cols] = unified[month_cols].fillna(0)
 
-    # Keep only features that actually exist after the join
     available = [f for f in WAITER_UNIFIED_FEATURES if f in unified.columns]
     return unified[available]
-
-
-# ---------------------------------------------------------------------------
-# Step 4: five ensemble approaches
-# ---------------------------------------------------------------------------
 
 def _run_unified_models(
     unified: pd.DataFrame,
@@ -311,6 +276,11 @@ def _fusion2_score(scores: dict) -> np.ndarray:
     return 0.5 * _rank(scores["iso"]) + 0.5 * _rank(scores["ocsvm"])
 
 
+def _fusion_asym_score(scores: dict, w_ocsvm: float = 0.7, w_if: float = 0.3) -> np.ndarray:
+    """Asymmetric rank fusion: OCSVM-dominant."""
+    return w_ocsvm * _rank(scores["ocsvm"]) + w_if * _rank(scores["iso"])
+
+
 def _fusion_signals_score(unified: pd.DataFrame, features: list) -> np.ndarray:
     """
     Rank fusion of raw sub-signals without re-fitting any model on unified features.
@@ -325,9 +295,21 @@ def _fusion_signals_score(unified: pd.DataFrame, features: list) -> np.ndarray:
     return score
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def _fusion_signals_raw_score(unified: pd.DataFrame, features: list) -> np.ndarray:
+    """
+    Weighted sum of raw (min-max scaled) sub-signals, no rank transformation.
+    Each signal is scaled to [0, 1] via min-max, then weighted by _SIGNAL_WEIGHTS.
+    """
+    total_w = sum(_SIGNAL_WEIGHTS.get(f, 1.0) for f in features)
+    score = np.zeros(len(unified), dtype=np.float64)
+    for f in features:
+        col = unified[f].fillna(0).values.astype(np.float64)
+        lo, hi = col.min(), col.max()
+        if hi > lo:
+            col = (col - lo) / (hi - lo)
+        w = _SIGNAL_WEIGHTS.get(f, 1.0)
+        score += (w / total_w) * col
+    return score
 
 def compare_waiter_ensemble(
     activity_state: int = 2,
@@ -361,8 +343,6 @@ def compare_waiter_ensemble(
         min_working_days=5,
         place_num_of_waiters = 2
     )
-
-    # --- filters ---
     waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
     waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
 
@@ -375,7 +355,6 @@ def compare_waiter_ensemble(
     print(f"Waiters: {n_total} total, {n_fraud} known fraud")
     print(f"Waiter-weeks: {len(waiter_week_data)} | Waiter-months: {len(waiter_month_data)}")
 
-    # --- sub-models ---
     print("Running waiter-week model …")
     week_scores = _run_week_model(waiter_week_data, y_week, n_estimators, n_neighbors)
     week_agg = _aggregate_week_signals(waiter_week_data, week_scores)
@@ -384,35 +363,31 @@ def compare_waiter_ensemble(
     month_scores = _run_month_model(waiter_month_data, y_month, n_estimators, n_neighbors)
     month_agg = _aggregate_month_signals(waiter_month_data, month_scores)
 
-    # --- unified features ---
     print("Building unified feature matrix …")
     unified = _build_unified(waiter_data, week_agg, month_agg)
     features = unified.columns.tolist()
     n_features = len(features)
 
-    # --- unified models (IF / OCSVM / LOF) ---
     print("Running unified models …")
     results_base, _, scores_unified = _run_unified_models(
         unified, y_waiter, features, n_estimators, n_neighbors
     )
 
-    # --- ensemble scores ---
     score_fusion2 = _fusion2_score(scores_unified)
     score_fusion_sig = _fusion_signals_score(unified, features)
+    score_fusion_raw = _fusion_signals_raw_score(unified, features)
+    score_fusion_asym = _fusion_asym_score(scores_unified)
 
-    # --- metrics ---
     rows = []
     for name, score in [
         ("IF (unified)", scores_unified["iso"]),
         ("OCSVM (unified)", scores_unified["ocsvm"]),
         ("LOF (unified)", scores_unified["lof"]),
-        ("Fusion-2 (IF+OCSVM)", score_fusion2),
-        ("Fusion-sig (sub-signals)", score_fusion_sig),
     ]:
         rows.append(_metrics_row(name, score, y_waiter))
     metrics_df = pd.DataFrame(rows)
 
-    # --- risk ranking (by Fusion-sig) ---
+    # --- risk ranking ---
     risk_df = pd.DataFrame(
         {
             "waiter_id": waiter_data.index,
@@ -422,13 +397,14 @@ def compare_waiter_ensemble(
             "score_ocsvm": scores_unified["ocsvm"],
             "score_lof": scores_unified["lof"],
             "score_fusion2": score_fusion2,
+            "score_fusion_asym": score_fusion_asym,
             "score_fusion_sig": score_fusion_sig,
+            "score_fusion_raw": score_fusion_raw,
         }
     )
-    risk_df = risk_df.sort_values("score_fusion_sig", ascending=False).reset_index(drop=True)
+    risk_df = risk_df.sort_values("score_ocsvm", ascending=False).reset_index(drop=True)
     risk_df.insert(0, "ensemble_rank", risk_df.index + 1)
 
-    # --- print results ---
     _print_results(metrics_df, n_total, n_fraud, n_features, top_n, risk_df)
 
     if scores_csv_path:
@@ -457,14 +433,24 @@ def _print_results(
     print()
     print(metrics_df.to_string(index=False))
     print()
-    print(f"Top-{top_n} risk ranking (by OCSVM (unified)):")
+    print(f"Top-{top_n} risk ranking (by OCSVM):")
     print("-" * 70)
-    cols = ["ensemble_rank", "waiter_id", "is_fraud", "score_fusion_sig", "score_fusion2", "score_if", "score_ocsvm"]
+    cols = ["ensemble_rank", "waiter_id", "is_fraud", "score_ocsvm", "score_fusion_asym"]
     print(risk_df[cols].sort_values("score_ocsvm", ascending=False).head(top_n).to_string(index=False))
     print()
     n_fraud_in_top = int(risk_df.head(top_n)["is_fraud"].sum())
     print(f"Fraud in top-{top_n}: {n_fraud_in_top} / {n_fraud}  "
           f"(precision={n_fraud_in_top/top_n:.2f}, recall={n_fraud_in_top/n_fraud:.2f})")
+
+    missed = risk_df[(risk_df["is_fraud"] == 1) & (risk_df["ensemble_rank"] > top_n)].copy()
+    print()
+    print(f"Known frauds outside OCSVM top-{top_n} (not in the table above):")
+    print("-" * 70)
+    if len(missed) == 0:
+        print("(none — all known fraud waiters appear in the top list.)")
+    else:
+        print(missed[cols].sort_values("score_ocsvm", ascending=False).to_string(index=False))
+        print(f"\nCount: {len(missed)} fraud waiter(s) ranked below #{top_n} by OCSVM.")
 
 
 def top_n_risk(risk_df: pd.DataFrame, n: int = 14) -> pd.DataFrame:
