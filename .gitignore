@@ -2,4 +2,21 @@
 # data files
 *.csv
 *.parquet
+*.png
 data/
+
+# python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# notebook artifacts
+.ipynb_checkpoints/
+
+# os/editor local files
+.DS_Store
+.vscode/
+.claude/
+
+# local outputs
+results/
