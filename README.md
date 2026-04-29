@@ -20,12 +20,17 @@ The modeling flow has three levels:
 
 These signals are unified and combined in a final ensemble at waiter level.
 
+Final project scope:
+- 3 base model scripts: card, waiter-week, waiter-month
+- 1 final ensemble with 3 meta-models (IF / OCSVM / LOF)
+- 1 unified feature-selection pipeline notebook
+
 ## Main scripts
 
-- `models/models.py` - card-level IF / OCSVM / LOF experiments.
+- `models/card_level_models.py` - card-level IF / OCSVM / LOF experiments.
 - `models/waiter_week_models.py` - waiter-week IF / OCSVM / LOF evaluation.
 - `models/waiter_month_models.py` - waiter-month IF / OCSVM / LOF evaluation.
-- `models/waiter_ensemble.py` - final waiter-level ensemble; supports real and synthetic evaluation.
+- `models/waiter_ensemble.py` - final waiter-level ensemble with 3 meta-models (IF / OCSVM / LOF); supports real and synthetic evaluation.
 
 ## Feature selection notebook
 
