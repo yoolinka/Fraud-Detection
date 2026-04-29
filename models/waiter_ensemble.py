@@ -37,6 +37,7 @@ if _project_root not in sys.path:
 
 from config import load_data, FEATURES
 from fit_and_evaluate import fit_and_evaluate, fit_and_evaluate_per_model, _top_k_recall, _top_k_precision
+from synt_data_generation import generate_synthetic_data
 
 import importlib.util
 
@@ -417,6 +418,132 @@ def compare_waiter_ensemble(
     return metrics_df, risk_df
 
 
+def compare_waiter_ensemble_real_vs_synthetic(
+    activity_state: int = 2,
+    days_visits: int = 2,
+    min_working_days: int = 5,
+    min_num_of_trn_week: int = 8,
+    min_num_of_trn_month: int = 10,
+    n_estimators: int = 200,
+    n_neighbors: int = 10,
+    n_synthetic: int = 500,
+    noise_scale: float = 0.1,
+    random_state: int = 42,
+    top_n: int = 20,
+    real_scores_csv_path: Optional[str] = None,
+    synthetic_scores_csv_path: Optional[str] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Compare waiter-level ensemble metrics on real vs synthetic data.
+    Synthetic data is built as: non-fraud rows + noisy fraud resamples.
+    """
+    metrics_real, risk_real = compare_waiter_ensemble(
+        activity_state=activity_state,
+        days_visits=days_visits,
+        min_working_days=min_working_days,
+        min_num_of_trn_week=min_num_of_trn_week,
+        min_num_of_trn_month=min_num_of_trn_month,
+        n_estimators=n_estimators,
+        n_neighbors=n_neighbors,
+        top_n=top_n,
+        scores_csv_path=real_scores_csv_path,
+    )
+    metrics_real = metrics_real.copy()
+    metrics_real.insert(0, "dataset", "Real")
+
+    print("\nBuilding synthetic waiter-level data …")
+    _, _, waiter_week_data, waiter_month_data, waiter_data = load_data(
+        activity_state=activity_state,
+        days_visits=days_visits,
+        total_num_of_trn=8,
+        num_of_trn=8,
+        min_working_days=min_working_days,
+        place_num_of_waiters=2,
+    )
+    waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
+    waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
+    waiter_data = waiter_data.copy()
+    waiter_data["is_fraud"] = waiter_data["is_fraud"].astype(int)
+
+    synthetic_waiter = generate_synthetic_data(
+        waiter_data,
+        n_synthetic=n_synthetic,
+        noise_scale=noise_scale,
+        random_state=random_state,
+    )
+    y_waiter_synt = synthetic_waiter["is_fraud"].astype(int).values
+    y_week = waiter_week_data["is_fraud"].astype(int).values
+    y_month = waiter_month_data["is_fraud"].astype(int).values
+
+    week_scores = _run_week_model(waiter_week_data, y_week, n_estimators, n_neighbors)
+    week_agg = _aggregate_week_signals(waiter_week_data, week_scores)
+    month_scores = _run_month_model(waiter_month_data, y_month, n_estimators, n_neighbors)
+    month_agg = _aggregate_month_signals(waiter_month_data, month_scores)
+
+    unified_synt = _build_unified(synthetic_waiter, week_agg, month_agg)
+    features_synt = unified_synt.columns.tolist()
+    _, _, scores_unified_synt = _run_unified_models(
+        unified_synt, y_waiter_synt, features_synt, n_estimators, n_neighbors
+    )
+
+    score_fusion2_synt = _fusion2_score(scores_unified_synt)
+    score_fusion_sig_synt = _fusion_signals_score(unified_synt, features_synt)
+    score_fusion_raw_synt = _fusion_signals_raw_score(unified_synt, features_synt)
+    score_fusion_asym_synt = _fusion_asym_score(scores_unified_synt)
+
+    rows_synt = []
+    for name, score in [
+        ("IF (unified)", scores_unified_synt["iso"]),
+        ("OCSVM (unified)", scores_unified_synt["ocsvm"]),
+        ("LOF (unified)", scores_unified_synt["lof"]),
+        ("Fusion-2 (IF+OCSVM ranks)", score_fusion2_synt),
+        ("Fusion-sig (weighted rank sum)", score_fusion_sig_synt),
+        ("Fusion-raw (weighted min-max sum)", score_fusion_raw_synt),
+        ("Fusion-asym (0.7 OCSVM + 0.3 IF)", score_fusion_asym_synt),
+    ]:
+        rows_synt.append(_metrics_row(name, score, y_waiter_synt))
+    metrics_synt = pd.DataFrame(rows_synt)
+    metrics_synt.insert(0, "dataset", "Synthetic")
+
+    risk_synt = pd.DataFrame(
+        {
+            "waiter_id": synthetic_waiter.index,
+            "is_fraud": y_waiter_synt,
+            **{f: unified_synt[f].values for f in features_synt},
+            "score_if": scores_unified_synt["iso"],
+            "score_ocsvm": scores_unified_synt["ocsvm"],
+            "score_lof": scores_unified_synt["lof"],
+            "score_fusion2": score_fusion2_synt,
+            "score_fusion_asym": score_fusion_asym_synt,
+            "score_fusion_sig": score_fusion_sig_synt,
+            "score_fusion_raw": score_fusion_raw_synt,
+        }
+    )
+    risk_synt = risk_synt.sort_values("score_ocsvm", ascending=False).reset_index(drop=True)
+    risk_synt.insert(0, "ensemble_rank", risk_synt.index + 1)
+
+    print()
+    print("=" * 70)
+    print("Waiter-level ensemble — real vs synthetic comparison")
+    print("=" * 70)
+    print(
+        f"Real: n_total={len(risk_real)}, n_fraud={int(risk_real['is_fraud'].sum())} | "
+        f"Synthetic: n_total={len(risk_synt)}, n_fraud={int(risk_synt['is_fraud'].sum())}"
+    )
+    print(f"Synthetic generation: n_synthetic={n_synthetic}, noise_scale={noise_scale}, random_state={random_state}")
+    print()
+    print(pd.concat([metrics_real, metrics_synt], ignore_index=True).to_string(index=False))
+
+    if synthetic_scores_csv_path:
+        d = os.path.dirname(os.path.abspath(synthetic_scores_csv_path))
+        if d:
+            os.makedirs(d, exist_ok=True)
+        risk_synt.to_csv(synthetic_scores_csv_path, index=False)
+        print(f"\nSynthetic risk ranking saved to {synthetic_scores_csv_path}")
+
+    return metrics_real, metrics_synt, risk_real, risk_synt
+
+
 def _print_results(
     metrics_df: pd.DataFrame,
     n_total: int,
@@ -465,16 +592,38 @@ if __name__ == "__main__":
     parser.add_argument("--top-n", type=int, default=20)
     parser.add_argument("--min-working-days", type=int, default=5)
     parser.add_argument("--n-estimators", type=int, default=200)
+    parser.add_argument("--synthetic", action="store_true", help="Compare real vs synthetic ensemble results")
+    parser.add_argument("--n-synthetic", type=int, default=500, help="Synthetic fraud samples for --synthetic")
+    parser.add_argument("--noise-scale", type=float, default=0.1, help="Noise scale for synthetic fraud generation")
+    parser.add_argument("--random-state", type=int, default=42, help="Random seed for synthetic generation")
     parser.add_argument(
         "--scores-csv",
         type=str,
         default=os.path.join(_project_root, "waiter_ensemble_risk.csv"),
     )
+    parser.add_argument(
+        "--synthetic-scores-csv",
+        type=str,
+        default=os.path.join(_project_root, "waiter_ensemble_risk_synthetic.csv"),
+        help="Path for synthetic risk ranking CSV (used with --synthetic)",
+    )
     args = parser.parse_args()
 
-    metrics, risk = compare_waiter_ensemble(
-        min_working_days=args.min_working_days,
-        n_estimators=args.n_estimators,
-        top_n=args.top_n,
-        scores_csv_path=args.scores_csv,
-    )
+    if args.synthetic:
+        compare_waiter_ensemble_real_vs_synthetic(
+            min_working_days=args.min_working_days,
+            n_estimators=args.n_estimators,
+            top_n=args.top_n,
+            n_synthetic=args.n_synthetic,
+            noise_scale=args.noise_scale,
+            random_state=args.random_state,
+            real_scores_csv_path=args.scores_csv,
+            synthetic_scores_csv_path=args.synthetic_scores_csv,
+        )
+    else:
+        compare_waiter_ensemble(
+            min_working_days=args.min_working_days,
+            n_estimators=args.n_estimators,
+            top_n=args.top_n,
+            scores_csv_path=args.scores_csv,
+        )
