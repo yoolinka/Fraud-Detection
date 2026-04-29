@@ -22,22 +22,32 @@ These signals are unified and combined in a final ensemble at waiter level.
 
 ## Main scripts
 
-- `models/models.py` - card-level IF / OCSVM / LOF experiments (+ synthetic support).
-- `models/waiter_week_models.py` - waiter-week models (+ real vs synthetic evaluation).
-- `models/waiter_month_models.py` - waiter-month models (+ real vs synthetic evaluation).
-- `models/waiter_ensemble.py` - final waiter-level ensemble, including real vs synthetic comparison.
+- `models/models.py` - card-level IF / OCSVM / LOF experiments.
+- `models/waiter_week_models.py` - waiter-week IF / OCSVM / LOF evaluation.
+- `models/waiter_month_models.py` - waiter-month IF / OCSVM / LOF evaluation.
+- `models/waiter_ensemble.py` - final waiter-level ensemble; supports real and synthetic evaluation.
+
+## Feature selection notebook
+
+- `models_tuning/waiter_month_feature_selection.ipynb` is now the unified feature-selection notebook for all three granularities.
+- Set `LEVEL` in the setup cell to one of:
+  - `person`
+  - `waiter_week`
+  - `waiter_month`
+- Then run cells top-to-bottom.
 
 ## Synthetic data support
 
-Synthetic fraud generation is implemented in `models/synt_data_generation.py`.
-Final waiter-level ensemble now supports synthetic evaluation through:
+Synthetic evaluation is available in the final waiter-level ensemble (`models/waiter_ensemble.py`) through:
 
 - `compare_waiter_ensemble_real_vs_synthetic(...)` function
-- CLI flag `--synthetic` in `models/waiter_ensemble.py`
+- CLI flag `--synthetic` with:
+  - `--synthetic-mode unified_interp`
+  - `--synthetic-mode unified_clamped`
 
 Example:
 
-`python3 models/waiter_ensemble.py --synthetic --n-synthetic 500 --noise-scale 0.1`
+`python3 models/waiter_ensemble.py --synthetic --synthetic-mode unified_interp --n-synthetic 500`
 
 ## Reproducibility
 
@@ -50,7 +60,7 @@ Example:
    - `python3 models/waiter_ensemble.py --top-n 20`
 4. Output risk ranking is saved to:
    - `waiter_ensemble_risk.csv` (real)
-   - `waiter_ensemble_risk_synthetic.csv` (synthetic mode)
+   - `waiter_ensemble_risk_synthetic.csv` (when run with `--synthetic`)
 
 ## Data and artifacts policy
 
