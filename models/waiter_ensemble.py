@@ -12,18 +12,16 @@ Signals used:
     month_iso_max, month_ocsvm_max, month_lof_max,
     month_iso_mean, month_ocsvm_mean, month_n_top5pct
 
-Ensemble approaches compared:
-  IF          — Isolation Forest on all unified features
-  OCSVM       — One-Class SVM on all unified features
-  LOF         — LOF on all unified features
-  Fusion-2    — Rank fusion: IF + OCSVM on unified (50/50)
-  Fusion-sig  — Rank fusion of raw sub-signals, no re-fitting
+Final unified meta-models (trained on all unified features):
+  IF (iso)    — Isolation Forest
+  OCSVM       — One-Class SVM
+  LOF         — Local Outlier Factor
 """
 
 import os
 import sys
 import warnings
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -35,7 +33,7 @@ _project_root = os.path.abspath(os.path.join(_script_dir, ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from config import load_data, FEATURES
+from config import load_data
 from fit_and_evaluate import fit_and_evaluate, fit_and_evaluate_per_model, _top_k_recall, _top_k_precision
 from synt_data_generation import generate_synthetic_data
 
@@ -59,48 +57,13 @@ WAITER_UNIFIED_FEATURES = [
     "month_n_top5pct",
 ]
 
-_LOF_FEATURES_ALL = {"lof_90", "share_anomaly_weeks_lof", "week_lof_max", "month_lof_max"}
-_LOF_FEATURES_CARD_ONLY = {"lof_90"}
-_SHARE_ANOMALY_WEEKS = {"share_anomaly_weeks_iso", "share_anomaly_weeks_ocsvm", "share_anomaly_weeks_lof"}
-WAITER_UNIFIED_FEATURES_NO_LOF = [f for f in WAITER_UNIFIED_FEATURES if f not in _LOF_FEATURES_ALL]
-WAITER_UNIFIED_FEATURES_SMART = [f for f in WAITER_UNIFIED_FEATURES if f not in _LOF_FEATURES_CARD_ONLY]
-
-_SIGNAL_WEIGHTS = {
-    # card — IF and OCSVM strong, LOF near-zero
-    "iso_90":                              2.7,
-    "ocsvm_90":                            2.3,
-    "lof_90":                              0.1,
-    "share_active_clients_only_this_waiter": 1.0,
-    "share_anomaly_weeks_iso":             0.6,
-    "share_anomaly_weeks_ocsvm":           0.25,
-    "share_anomaly_weeks_lof":             0.7,
-    # week — LOF best, OCSVM weakest
-    "week_lof_max":                        1.4,
-    "week_iso_max":                        1.2,
-    "week_ocsvm_max":                      0.5,
-    "week_iso_mean":                       0.6,
-    "week_ocsvm_mean":                     0.25,
-    "week_n_top5pct":                      0.6,
-    # month — IF best, OCSVM weakest
-    "month_iso_max":                       1.7,
-    "month_lof_max":                       1.3,
-    "month_ocsvm_max":                     0.7,
-    "month_iso_mean":                      0.85,
-    "month_ocsvm_mean":                    0.35,
-    "month_n_top5pct":                     0.85,
-}
 from waiter_month_models import WAITER_MONTH_FEATURES_ISO, WAITER_MONTH_FEATURES_OCSVM, WAITER_MONTH_FEATURES_LOF
 from waiter_week_models import WAITER_WEEK_FEATURES_ISO, WAITER_WEEK_FEATURES_OCSVM, WAITER_WEEK_FEATURES_LOF
 
 TOP_K_LIST = [5, 10, 14, 20, 50]
 
-def _rank(arr: np.ndarray) -> np.ndarray:
-    """Percentile rank in [0, 1]; higher = more anomalous."""
-    n = len(arr)
-    order = np.argsort(arr)
-    ranks = np.empty(n, dtype=np.float64)
-    ranks[order] = np.arange(1, n + 1) / n
-    return ranks
+# Extended top-k for synthetic waiter evaluation (includes 50, 100, 200).
+SYNTHETIC_TOP_K_LIST = [50, 100, 200]
 
 
 def _extract_waiter_id(data: pd.DataFrame) -> pd.Series:
@@ -118,11 +81,119 @@ def _top5pct_threshold(scores: np.ndarray) -> float:
     return float(np.percentile(scores, 95))
 
 
-def _metrics_row(name: str, score: np.ndarray, y_true: np.ndarray) -> dict:
+def _metrics_row(
+    name: str,
+    score: np.ndarray,
+    y_true: np.ndarray,
+    top_k_list: Optional[list[int]] = None,
+) -> dict:
+    k_list = TOP_K_LIST if top_k_list is None else top_k_list
     row = {"approach": name}
-    row.update(_top_k_recall(score, y_true, TOP_K_LIST))
-    row.update(_top_k_precision(score, y_true, TOP_K_LIST))
+    row.update(_top_k_recall(score, y_true, k_list))
+    row.update(_top_k_precision(score, y_true, k_list))
     return row
+
+
+def _build_unified_from_pipeline(
+    activity_state: int,
+    days_visits: int,
+    min_working_days: int,
+    min_num_of_trn_week: int,
+    min_num_of_trn_month: int,
+    n_estimators: int,
+    n_neighbors: int,
+) -> tuple[pd.DataFrame, np.ndarray, list, pd.DataFrame]:
+    """
+    Load data, run week/month sub-models, return unified feature matrix, y_waiter, feature names, waiter_data.
+    """
+    _, _, waiter_week_data, waiter_month_data, waiter_data = load_data(
+        activity_state=activity_state,
+        days_visits=days_visits,
+        total_num_of_trn=8,
+        num_of_trn=8,
+        min_working_days=min_working_days,
+        place_num_of_waiters=2,
+    )
+    waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
+    waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
+    waiter_data = waiter_data.copy()
+    waiter_data["is_fraud"] = waiter_data["is_fraud"].astype(int)
+
+    y_week = waiter_week_data["is_fraud"].astype(int).values
+    y_month = waiter_month_data["is_fraud"].astype(int).values
+    y_waiter = waiter_data["is_fraud"].astype(int).values
+
+    week_scores = _run_week_model(waiter_week_data, y_week, n_estimators, n_neighbors)
+    week_agg = _aggregate_week_signals(waiter_week_data, week_scores)
+    month_scores = _run_month_model(waiter_month_data, y_month, n_estimators, n_neighbors)
+    month_agg = _aggregate_month_signals(waiter_month_data, month_scores)
+    unified = _build_unified(waiter_data, week_agg, month_agg)
+    features = unified.columns.tolist()
+    return unified, y_waiter, features, waiter_data
+
+
+def _synthetic_unified_clamped(
+    unified: pd.DataFrame,
+    y_waiter: np.ndarray,
+    features: list,
+    n_synthetic: int,
+    noise_scale: float,
+    random_state: int,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """
+    Clamped additive noise on resampled real-fraud rows (same idea as card-level ``evaluate_card_synthetic_auc``).
+    Stack: all non-fraud unified rows + synthetic fraud rows.
+    """
+    fraud_mask = y_waiter == 1
+    nf_mask = y_waiter == 0
+    fraud_u = unified.loc[fraud_mask, features]
+    nf_u = unified.loc[nf_mask, features]
+    if len(fraud_u) == 0:
+        raise ValueError("No fraud waiters in unified matrix; cannot build clamped synthetic fraud.")
+    rng = np.random.default_rng(random_state)
+    sampled = fraud_u.sample(n=n_synthetic, replace=True, random_state=random_state)
+    nf_std = nf_u.std().values
+    f_min = fraud_u.min().values
+    f_max = fraud_u.max().values
+    noise = rng.normal(0, 1, sampled.shape) * (noise_scale * nf_std)
+    synth_vals = np.clip(sampled.values + noise, f_min, f_max)
+    synth_df = pd.DataFrame(synth_vals, columns=features)
+    synth_df.index = [f"__synth_clamped_{random_state}_{i}" for i in range(n_synthetic)]
+
+    nf_part = unified.loc[nf_mask, features].copy()
+    unified_synt = pd.concat([nf_part, synth_df], axis=0)
+    y_synt = np.concatenate([np.zeros(len(nf_part), dtype=int), np.ones(n_synthetic, dtype=int)])
+    return unified_synt, y_synt
+
+
+def _synthetic_unified_interp(
+    unified: pd.DataFrame,
+    y_waiter: np.ndarray,
+    features: list,
+    n_synthetic: int,
+    alpha: float,
+    random_state: int,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """
+    Interpolation (1-α)*fraud + α*non-fraud feature draws — ensemble_synthetic_test / card AUC style.
+    """
+    fraud_mask = y_waiter == 1
+    nf_mask = y_waiter == 0
+    fraud_u = unified.loc[fraud_mask, features]
+    nf_u = unified.loc[nf_mask, features]
+    if len(fraud_u) == 0 or len(nf_u) == 0:
+        raise ValueError("Need both fraud and non-fraud waiters for interpolation synthetic data.")
+    fraud_sampled = fraud_u.sample(n=n_synthetic, replace=True, random_state=random_state).values
+    nf_sampled = nf_u.sample(n=n_synthetic, replace=True, random_state=random_state).values
+    synth_vals = (1.0 - alpha) * fraud_sampled + alpha * nf_sampled
+    synth_df = pd.DataFrame(synth_vals, columns=features)
+    synth_df.index = [f"__synth_interp_{random_state}_{i}" for i in range(n_synthetic)]
+
+    nf_part = unified.loc[nf_mask, features].copy()
+    unified_synt = pd.concat([nf_part, synth_df], axis=0)
+    y_synt = np.concatenate([np.zeros(len(nf_part), dtype=int), np.ones(n_synthetic, dtype=int)])
+    return unified_synt, y_synt
+
 
 def _run_week_model(
     waiter_week_data: pd.DataFrame,
@@ -272,46 +343,6 @@ def _run_unified_models(
     )
 
 
-def _fusion2_score(scores: dict) -> np.ndarray:
-    """Rank fusion of IF + OCSVM on unified features (50/50)."""
-    return 0.5 * _rank(scores["iso"]) + 0.5 * _rank(scores["ocsvm"])
-
-
-def _fusion_asym_score(scores: dict, w_ocsvm: float = 0.7, w_if: float = 0.3) -> np.ndarray:
-    """Asymmetric rank fusion: OCSVM-dominant."""
-    return w_ocsvm * _rank(scores["ocsvm"]) + w_if * _rank(scores["iso"])
-
-
-def _fusion_signals_score(unified: pd.DataFrame, features: list) -> np.ndarray:
-    """
-    Rank fusion of raw sub-signals without re-fitting any model on unified features.
-    Each signal is rank-normalised; weighted sum uses _SIGNAL_WEIGHTS.
-    """
-    total_w = sum(_SIGNAL_WEIGHTS.get(f, 1.0) for f in features)
-    score = np.zeros(len(unified), dtype=np.float64)
-    for f in features:
-        col = unified[f].fillna(0).values.astype(np.float64)
-        w = _SIGNAL_WEIGHTS.get(f, 1.0)
-        score += (w / total_w) * _rank(col)
-    return score
-
-
-def _fusion_signals_raw_score(unified: pd.DataFrame, features: list) -> np.ndarray:
-    """
-    Weighted sum of raw (min-max scaled) sub-signals, no rank transformation.
-    Each signal is scaled to [0, 1] via min-max, then weighted by _SIGNAL_WEIGHTS.
-    """
-    total_w = sum(_SIGNAL_WEIGHTS.get(f, 1.0) for f in features)
-    score = np.zeros(len(unified), dtype=np.float64)
-    for f in features:
-        col = unified[f].fillna(0).values.astype(np.float64)
-        lo, hi = col.min(), col.max()
-        if hi > lo:
-            col = (col - lo) / (hi - lo)
-        w = _SIGNAL_WEIGHTS.get(f, 1.0)
-        score += (w / total_w) * col
-    return score
-
 def compare_waiter_ensemble(
     activity_state: int = 2,
     days_visits: int = 2,
@@ -324,25 +355,24 @@ def compare_waiter_ensemble(
     scores_csv_path: Optional[str] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Full pipeline: load all granularities → build unified features → compare 5 approaches.
+    Full pipeline: load all granularities → build unified features → IF / OCSVM / LOF on unified matrix.
 
     Returns
     -------
     metrics_df : pd.DataFrame
-        One row per approach with recall@k and precision@k.
+        One row per model with recall@k and precision@k.
     risk_df : pd.DataFrame
-        One row per waiter, sorted by Fusion-sig score (best ensemble).
-        Columns: ensemble_rank, waiter_id, is_fraud, all unified features, all approach scores.
+        One row per waiter, sorted by OCSVM score (descending).
+        Columns: ensemble_rank, waiter_id, is_fraud, unified features, score_if, score_ocsvm, score_lof.
     """
     print("Loading data …")
     _, client_data, waiter_week_data, waiter_month_data, waiter_data = load_data(
         activity_state=activity_state,
         days_visits=days_visits,
         total_num_of_trn=8,
-
-        num_of_trn = 8,
-        min_working_days=5,
-        place_num_of_waiters = 2
+        num_of_trn=8,
+        min_working_days=min_working_days,
+        place_num_of_waiters=2,
     )
     waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
     waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
@@ -370,14 +400,9 @@ def compare_waiter_ensemble(
     n_features = len(features)
 
     print("Running unified models …")
-    results_base, _, scores_unified = _run_unified_models(
+    _, _, scores_unified = _run_unified_models(
         unified, y_waiter, features, n_estimators, n_neighbors
     )
-
-    score_fusion2 = _fusion2_score(scores_unified)
-    score_fusion_sig = _fusion_signals_score(unified, features)
-    score_fusion_raw = _fusion_signals_raw_score(unified, features)
-    score_fusion_asym = _fusion_asym_score(scores_unified)
 
     rows = []
     for name, score in [
@@ -397,10 +422,6 @@ def compare_waiter_ensemble(
             "score_if": scores_unified["iso"],
             "score_ocsvm": scores_unified["ocsvm"],
             "score_lof": scores_unified["lof"],
-            "score_fusion2": score_fusion2,
-            "score_fusion_asym": score_fusion_asym,
-            "score_fusion_sig": score_fusion_sig,
-            "score_fusion_raw": score_fusion_raw,
         }
     )
     risk_df = risk_df.sort_values("score_ocsvm", ascending=False).reset_index(drop=True)
@@ -432,10 +453,18 @@ def compare_waiter_ensemble_real_vs_synthetic(
     top_n: int = 20,
     real_scores_csv_path: Optional[str] = None,
     synthetic_scores_csv_path: Optional[str] = None,
+    synthetic_mode: Literal["unified_interp", "unified_clamped", "multilevel"] = "unified_interp",
+    interp_alpha: float = 0.1,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Compare waiter-level ensemble metrics on real vs synthetic data.
-    Synthetic data is built as: non-fraud rows + noisy fraud resamples.
+
+    Default ``ensemble_synthetic_test`` / card-style generation on the **unified** feature matrix after the real
+    pipeline:
+
+    - ``unified_interp`` — blend ``(1-α)·fraud + α·non-fraud`` (interpolation).
+    - ``unified_clamped`` — resample fraud rows + Gaussian noise clamped to fraud min/max (σ scales with ``noise_scale``).
+    - ``multilevel`` — legacy: ``generate_synthetic_data`` on waiter, waiter-week, and waiter-month tables separately.
     """
     metrics_real, risk_real = compare_waiter_ensemble(
         activity_state=activity_state,
@@ -451,72 +480,97 @@ def compare_waiter_ensemble_real_vs_synthetic(
     metrics_real = metrics_real.copy()
     metrics_real.insert(0, "dataset", "Real")
 
-    print("\nBuilding synthetic waiter-level data …")
-    _, _, waiter_week_data, waiter_month_data, waiter_data = load_data(
+    print("\nBuilding synthetic evaluation data …")
+    unified, y_waiter, features, waiter_data = _build_unified_from_pipeline(
         activity_state=activity_state,
         days_visits=days_visits,
-        total_num_of_trn=8,
-        num_of_trn=8,
         min_working_days=min_working_days,
-        place_num_of_waiters=2,
+        min_num_of_trn_week=min_num_of_trn_week,
+        min_num_of_trn_month=min_num_of_trn_month,
+        n_estimators=n_estimators,
+        n_neighbors=n_neighbors,
     )
-    waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
-    waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
-    waiter_data = waiter_data.copy()
-    waiter_data["is_fraud"] = waiter_data["is_fraud"].astype(int)
 
-    synthetic_waiter = generate_synthetic_data(
-        waiter_data,
-        n_synthetic=n_synthetic,
-        noise_scale=noise_scale,
-        random_state=random_state,
-    )
-    y_waiter_synt = synthetic_waiter["is_fraud"].astype(int).values
-    y_week = waiter_week_data["is_fraud"].astype(int).values
-    y_month = waiter_month_data["is_fraud"].astype(int).values
+    if synthetic_mode == "unified_interp":
+        print(f"  mode=unified_interp (α={interp_alpha}) — same family as ensemble_synthetic_test / card synthetic AUC")
+        unified_synt, y_waiter_synt = _synthetic_unified_interp(
+            unified, y_waiter, features, n_synthetic, interp_alpha, random_state
+        )
+        features_synt = features
+    elif synthetic_mode == "unified_clamped":
+        print(f"  mode=unified_clamped (σ scale={noise_scale}) — clamped noise vs non-fraud std")
+        unified_synt, y_waiter_synt = _synthetic_unified_clamped(
+            unified, y_waiter, features, n_synthetic, noise_scale, random_state
+        )
+        features_synt = features
+    else:
+        print("  mode=multilevel — generate_synthetic_data on waiter / week / month tables")
+        _, _, waiter_week_data, waiter_month_data, wd = load_data(
+            activity_state=activity_state,
+            days_visits=days_visits,
+            total_num_of_trn=8,
+            num_of_trn=8,
+            min_working_days=min_working_days,
+            place_num_of_waiters=2,
+        )
+        waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
+        waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
+        wd = wd.copy()
+        wd["is_fraud"] = wd["is_fraud"].astype(int)
 
-    week_scores = _run_week_model(waiter_week_data, y_week, n_estimators, n_neighbors)
-    week_agg = _aggregate_week_signals(waiter_week_data, week_scores)
-    month_scores = _run_month_model(waiter_month_data, y_month, n_estimators, n_neighbors)
-    month_agg = _aggregate_month_signals(waiter_month_data, month_scores)
+        synthetic_waiter = generate_synthetic_data(
+            wd,
+            n_synthetic=n_synthetic,
+            noise_scale=noise_scale,
+            random_state=random_state,
+        )
+        synthetic_week = generate_synthetic_data(
+            waiter_week_data,
+            n_synthetic=n_synthetic,
+            noise_scale=noise_scale,
+            random_state=random_state,
+        )
+        synthetic_month = generate_synthetic_data(
+            waiter_month_data,
+            n_synthetic=n_synthetic,
+            noise_scale=noise_scale,
+            random_state=random_state,
+        )
+        y_week_synt = synthetic_week["is_fraud"].astype(int).values
+        y_month_synt = synthetic_month["is_fraud"].astype(int).values
+        week_scores = _run_week_model(synthetic_week, y_week_synt, n_estimators, n_neighbors)
+        week_agg = _aggregate_week_signals(synthetic_week, week_scores)
+        month_scores = _run_month_model(synthetic_month, y_month_synt, n_estimators, n_neighbors)
+        month_agg = _aggregate_month_signals(synthetic_month, month_scores)
+        unified_synt = _build_unified(synthetic_waiter, week_agg, month_agg)
+        features_synt = unified_synt.columns.tolist()
+        y_waiter_synt = synthetic_waiter["is_fraud"].astype(int).values
 
-    unified_synt = _build_unified(synthetic_waiter, week_agg, month_agg)
-    features_synt = unified_synt.columns.tolist()
     _, _, scores_unified_synt = _run_unified_models(
         unified_synt, y_waiter_synt, features_synt, n_estimators, n_neighbors
     )
-
-    score_fusion2_synt = _fusion2_score(scores_unified_synt)
-    score_fusion_sig_synt = _fusion_signals_score(unified_synt, features_synt)
-    score_fusion_raw_synt = _fusion_signals_raw_score(unified_synt, features_synt)
-    score_fusion_asym_synt = _fusion_asym_score(scores_unified_synt)
 
     rows_synt = []
     for name, score in [
         ("IF (unified)", scores_unified_synt["iso"]),
         ("OCSVM (unified)", scores_unified_synt["ocsvm"]),
         ("LOF (unified)", scores_unified_synt["lof"]),
-        ("Fusion-2 (IF+OCSVM ranks)", score_fusion2_synt),
-        ("Fusion-sig (weighted rank sum)", score_fusion_sig_synt),
-        ("Fusion-raw (weighted min-max sum)", score_fusion_raw_synt),
-        ("Fusion-asym (0.7 OCSVM + 0.3 IF)", score_fusion_asym_synt),
     ]:
-        rows_synt.append(_metrics_row(name, score, y_waiter_synt))
+        rows_synt.append(
+            _metrics_row(name, score, y_waiter_synt, top_k_list=SYNTHETIC_TOP_K_LIST)
+        )
     metrics_synt = pd.DataFrame(rows_synt)
     metrics_synt.insert(0, "dataset", "Synthetic")
 
+    waiter_ids = unified_synt.index if synthetic_mode != "multilevel" else synthetic_waiter.index
     risk_synt = pd.DataFrame(
         {
-            "waiter_id": synthetic_waiter.index,
+            "waiter_id": waiter_ids,
             "is_fraud": y_waiter_synt,
             **{f: unified_synt[f].values for f in features_synt},
             "score_if": scores_unified_synt["iso"],
             "score_ocsvm": scores_unified_synt["ocsvm"],
             "score_lof": scores_unified_synt["lof"],
-            "score_fusion2": score_fusion2_synt,
-            "score_fusion_asym": score_fusion_asym_synt,
-            "score_fusion_sig": score_fusion_sig_synt,
-            "score_fusion_raw": score_fusion_raw_synt,
         }
     )
     risk_synt = risk_synt.sort_values("score_ocsvm", ascending=False).reset_index(drop=True)
@@ -530,9 +584,17 @@ def compare_waiter_ensemble_real_vs_synthetic(
         f"Real: n_total={len(risk_real)}, n_fraud={int(risk_real['is_fraud'].sum())} | "
         f"Synthetic: n_total={len(risk_synt)}, n_fraud={int(risk_synt['is_fraud'].sum())}"
     )
-    print(f"Synthetic generation: n_synthetic={n_synthetic}, noise_scale={noise_scale}, random_state={random_state}")
+    print(
+        f"Synthetic: mode={synthetic_mode}, n_synthetic={n_synthetic}, random_state={random_state}"
+        + (f", interp_alpha={interp_alpha}" if synthetic_mode == "unified_interp" else "")
+        + (f", noise_scale={noise_scale}" if synthetic_mode in ("unified_clamped", "multilevel") else "")
+    )
     print()
-    print(pd.concat([metrics_real, metrics_synt], ignore_index=True).to_string(index=False))
+    print("Real metrics:")
+    print(metrics_real.to_string(index=False))
+    print()
+    print("Synthetic metrics (top-k includes 50, 100, 200):")
+    print(metrics_synt.to_string(index=False))
 
     if synthetic_scores_csv_path:
         d = os.path.dirname(os.path.abspath(synthetic_scores_csv_path))
@@ -562,7 +624,7 @@ def _print_results(
     print()
     print(f"Top-{top_n} risk ranking (by OCSVM):")
     print("-" * 70)
-    cols = ["ensemble_rank", "waiter_id", "is_fraud", "score_ocsvm", "score_fusion_asym"]
+    cols = ["ensemble_rank", "waiter_id", "is_fraud", "score_if", "score_ocsvm", "score_lof"]
     print(risk_df[cols].sort_values("score_ocsvm", ascending=False).head(top_n).to_string(index=False))
     print()
     n_fraud_in_top = int(risk_df.head(top_n)["is_fraud"].sum())
@@ -593,9 +655,22 @@ if __name__ == "__main__":
     parser.add_argument("--min-working-days", type=int, default=5)
     parser.add_argument("--n-estimators", type=int, default=200)
     parser.add_argument("--synthetic", action="store_true", help="Compare real vs synthetic ensemble results")
-    parser.add_argument("--n-synthetic", type=int, default=500, help="Synthetic fraud samples for --synthetic")
-    parser.add_argument("--noise-scale", type=float, default=0.1, help="Noise scale for synthetic fraud generation")
+    parser.add_argument("--n-synthetic", type=int, default=200, help="Synthetic fraud samples for --synthetic")
+    parser.add_argument("--noise-scale", type=float, default=0.02, help="Noise scale (multilevel / unified_clamped)")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for synthetic generation")
+    parser.add_argument(
+        "--synthetic-mode",
+        type=str,
+        default="unified_interp",
+        choices=["unified_interp", "unified_clamped", "multilevel"],
+        help="unified_interp / unified_clamped = ensemble_synthetic_test style on unified features; multilevel = legacy",
+    )
+    parser.add_argument(
+        "--interp-alpha",
+        type=float,
+        default=0.02,
+        help="Interpolation α for unified_interp (blend fraud vs non-fraud draws)",
+    )
     parser.add_argument(
         "--scores-csv",
         type=str,
@@ -619,6 +694,8 @@ if __name__ == "__main__":
             random_state=args.random_state,
             real_scores_csv_path=args.scores_csv,
             synthetic_scores_csv_path=args.synthetic_scores_csv,
+            synthetic_mode=args.synthetic_mode,
+            interp_alpha=args.interp_alpha,
         )
     else:
         compare_waiter_ensemble(
