@@ -35,7 +35,6 @@ if _project_root not in sys.path:
 
 from config import load_data
 from fit_and_evaluate import fit_and_evaluate, fit_and_evaluate_per_model, _top_k_recall, _top_k_precision
-from synt_data_generation import generate_synthetic_data
 
 import importlib.util
 
@@ -453,7 +452,7 @@ def compare_waiter_ensemble_real_vs_synthetic(
     top_n: int = 20,
     real_scores_csv_path: Optional[str] = None,
     synthetic_scores_csv_path: Optional[str] = None,
-    synthetic_mode: Literal["unified_interp", "unified_clamped", "multilevel"] = "unified_interp",
+    synthetic_mode: Literal["unified_interp", "unified_clamped"] = "unified_interp",
     interp_alpha: float = 0.1,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -464,7 +463,6 @@ def compare_waiter_ensemble_real_vs_synthetic(
 
     - ``unified_interp`` — blend ``(1-α)·fraud + α·non-fraud`` (interpolation).
     - ``unified_clamped`` — resample fraud rows + Gaussian noise clamped to fraud min/max (σ scales with ``noise_scale``).
-    - ``multilevel`` — legacy: ``generate_synthetic_data`` on waiter, waiter-week, and waiter-month tables separately.
     """
     metrics_real, risk_real = compare_waiter_ensemble(
         activity_state=activity_state,
@@ -503,48 +501,6 @@ def compare_waiter_ensemble_real_vs_synthetic(
             unified, y_waiter, features, n_synthetic, noise_scale, random_state
         )
         features_synt = features
-    else:
-        print("  mode=multilevel — generate_synthetic_data on waiter / week / month tables")
-        _, _, waiter_week_data, waiter_month_data, wd = load_data(
-            activity_state=activity_state,
-            days_visits=days_visits,
-            total_num_of_trn=8,
-            num_of_trn=8,
-            min_working_days=min_working_days,
-            place_num_of_waiters=2,
-        )
-        waiter_week_data = waiter_week_data[waiter_week_data["num_of_trn"] >= min_num_of_trn_week].copy()
-        waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn_month].copy()
-        wd = wd.copy()
-        wd["is_fraud"] = wd["is_fraud"].astype(int)
-
-        synthetic_waiter = generate_synthetic_data(
-            wd,
-            n_synthetic=n_synthetic,
-            noise_scale=noise_scale,
-            random_state=random_state,
-        )
-        synthetic_week = generate_synthetic_data(
-            waiter_week_data,
-            n_synthetic=n_synthetic,
-            noise_scale=noise_scale,
-            random_state=random_state,
-        )
-        synthetic_month = generate_synthetic_data(
-            waiter_month_data,
-            n_synthetic=n_synthetic,
-            noise_scale=noise_scale,
-            random_state=random_state,
-        )
-        y_week_synt = synthetic_week["is_fraud"].astype(int).values
-        y_month_synt = synthetic_month["is_fraud"].astype(int).values
-        week_scores = _run_week_model(synthetic_week, y_week_synt, n_estimators, n_neighbors)
-        week_agg = _aggregate_week_signals(synthetic_week, week_scores)
-        month_scores = _run_month_model(synthetic_month, y_month_synt, n_estimators, n_neighbors)
-        month_agg = _aggregate_month_signals(synthetic_month, month_scores)
-        unified_synt = _build_unified(synthetic_waiter, week_agg, month_agg)
-        features_synt = unified_synt.columns.tolist()
-        y_waiter_synt = synthetic_waiter["is_fraud"].astype(int).values
 
     _, _, scores_unified_synt = _run_unified_models(
         unified_synt, y_waiter_synt, features_synt, n_estimators, n_neighbors
@@ -562,7 +518,7 @@ def compare_waiter_ensemble_real_vs_synthetic(
     metrics_synt = pd.DataFrame(rows_synt)
     metrics_synt.insert(0, "dataset", "Synthetic")
 
-    waiter_ids = unified_synt.index if synthetic_mode != "multilevel" else synthetic_waiter.index
+    waiter_ids = unified_synt.index
     risk_synt = pd.DataFrame(
         {
             "waiter_id": waiter_ids,
@@ -587,7 +543,7 @@ def compare_waiter_ensemble_real_vs_synthetic(
     print(
         f"Synthetic: mode={synthetic_mode}, n_synthetic={n_synthetic}, random_state={random_state}"
         + (f", interp_alpha={interp_alpha}" if synthetic_mode == "unified_interp" else "")
-        + (f", noise_scale={noise_scale}" if synthetic_mode in ("unified_clamped", "multilevel") else "")
+        + (f", noise_scale={noise_scale}" if synthetic_mode == "unified_clamped" else "")
     )
     print()
     print("Real metrics:")
@@ -656,14 +612,14 @@ if __name__ == "__main__":
     parser.add_argument("--n-estimators", type=int, default=200)
     parser.add_argument("--synthetic", action="store_true", help="Compare real vs synthetic ensemble results")
     parser.add_argument("--n-synthetic", type=int, default=200, help="Synthetic fraud samples for --synthetic")
-    parser.add_argument("--noise-scale", type=float, default=0.02, help="Noise scale (multilevel / unified_clamped)")
+    parser.add_argument("--noise-scale", type=float, default=0.02, help="Noise scale for unified_clamped")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for synthetic generation")
     parser.add_argument(
         "--synthetic-mode",
         type=str,
         default="unified_interp",
-        choices=["unified_interp", "unified_clamped", "multilevel"],
-        help="unified_interp / unified_clamped = ensemble_synthetic_test style on unified features; multilevel = legacy",
+        choices=["unified_interp", "unified_clamped"],
+        help="unified_interp / unified_clamped = ensemble_synthetic_test style on unified features",
     )
     parser.add_argument(
         "--interp-alpha",

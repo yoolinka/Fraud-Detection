@@ -17,7 +17,7 @@ _project_root = os.path.abspath(os.path.join(_script_dir, ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from config import DATA_PATH, load_data
+from config import load_data
 from parquet.fraud_ids import FRAUD_WAITER_IDS
 
 import importlib.util
@@ -34,7 +34,6 @@ _client_models = importlib.util.module_from_spec(_client_models_spec)
 _client_models_spec.loader.exec_module(_client_models)
 
 from fit_and_evaluate import fit_and_evaluate_per_model
-from synt_data_generation import generate_synthetic_data
 
 WAITER_MONTH_FEATURES_ISO = [
     'top1_client_trn', 
@@ -291,136 +290,11 @@ def compare_waiter_month_models(
     return results_df, predictions, waiter_month_data, X_out_by_model, scores
 
 
-def compare_waiter_month_real_vs_synthetic(
-    features_by_model: Optional[Mapping[str, Sequence[str]]] = None,
-    waiter_features: Optional[Sequence[str]] = None,
-    agg_data: Optional[pd.DataFrame] = None,
-    fraud_waiter_month_ids: Optional[Union[Sequence, np.ndarray]] = None,
-    min_num_of_trn: int = 8,
-    num_of_trn: int = 1,
-    place_num_of_waiters: int = 1,
-    min_working_days: int = 2,
-    n_synthetic: int = 500,
-    noise_scale: float = 0.1,
-    random_state: int = 42,
-    plot_scores_path: Optional[str] = None,
-) -> tuple:
-    """
-    Run IF / OCSVM / LOF on real waiter–month data and on a synthetic dataset
-    (non-fraud rows + noisy resamples of real fraud), training on non-fraud only.
-    Mirrors ``compare_waiter_week_real_vs_synthetic`` in ``waiter_week_models.py``.
-    """
-    if agg_data is None:
-        waiter_month_data = _load_waiter_month_data(
-            num_of_trn=num_of_trn,
-            place_num_of_waiters=place_num_of_waiters,
-            min_working_days=min_working_days,
-        )
-    else:
-        waiter_month_data = agg_data.copy()
-        if waiter_month_data.index.name != "waiter_month" and "waiter_month" in waiter_month_data.columns:
-            waiter_month_data = waiter_month_data.set_index("waiter_month")
-
-    resolved = _resolve_features_by_model(features_by_model, waiter_features)
-    all_feats = sorted({c for feats in resolved.values() for c in feats})
-    missing = [c for c in all_feats if c not in waiter_month_data.columns]
-    if missing:
-        raise ValueError(f"Missing feature columns: {missing}")
-
-    waiter_month_data = waiter_month_data[waiter_month_data["num_of_trn"] >= min_num_of_trn].copy()
-
-    if fraud_waiter_month_ids is not None:
-        ids = set(fraud_waiter_month_ids)
-        y_fraud = waiter_month_data.index.isin(ids).astype(int).values
-    elif "is_fraud" in waiter_month_data.columns:
-        y_fraud = waiter_month_data["is_fraud"].astype(int).values
-    else:
-        y_fraud = waiter_month_data.index.isin(FRAUD_WAITER_IDS).astype(int).values
-
-    n_fraud_real = int(y_fraud.sum())
-    if n_fraud_real == 0:
-        raise ValueError("No known fraud waiter-months; cannot build synthetic fraud.")
-
-    waiter_month_data = waiter_month_data.copy()
-    waiter_month_data["is_fraud"] = y_fraud.astype(int)
-
-    X_fit_real, X_eval_real, _ = _scale_per_model(
-        waiter_month_data,
-        resolved,
-        exclude_fraud_from_training=True,
-        y_fraud=y_fraud,
-    )
-    results_real, _, scores_real = fit_and_evaluate_per_model(
-        X_fit_real,
-        X_eval_real,
-        y_fraud,
-        n_neighbors=20,
-        n_estimators=500,
-    )
-    results_real.insert(0, "dataset", "Real")
-
-    synthetic = generate_synthetic_data(
-        waiter_month_data,
-        n_synthetic=n_synthetic,
-        noise_scale=noise_scale,
-        random_state=random_state,
-    )
-    y_synt = synthetic["is_fraud"].astype(int).values
-    n_fraud_synt = int(y_synt.sum())
-    X_fit_synt, X_eval_synt, _ = _scale_per_model(
-        synthetic,
-        resolved,
-        exclude_fraud_from_training=True,
-        y_fraud=y_synt,
-    )
-    results_synt, _, scores_synt = fit_and_evaluate_per_model(
-        X_fit_synt,
-        X_eval_synt,
-        y_synt,
-        n_neighbors=20,
-        n_estimators=500,
-    )
-    results_synt.insert(0, "dataset", "Synthetic")
-
-    print("=" * 70)
-    print("Waiter–month: real vs synthetic — model comparison (train on non-fraud only)")
-    print("=" * 70)
-    print(f"Real:      n_total={len(waiter_month_data)}, n_fraud={n_fraud_real}")
-    print(f"Synthetic: n_total={len(synthetic)}, n_fraud={n_fraud_synt}")
-    print(
-        f"Features per model (iso / ocsvm / lof): {len(resolved['iso'])}, {len(resolved['ocsvm'])}, {len(resolved['lof'])}"
-    )
-    print(f"Filter: num_of_trn >= {min_num_of_trn}")
-    print()
-    combined = pd.concat([results_real, results_synt], ignore_index=True)
-    print(combined.to_string(index=False))
-    print()
-    print(
-        "Metrics: fraud_hit_rate = fraction of known frauds flagged; "
-        "recall@k / precision@k = top-k by score."
-    )
-    if plot_scores_path:
-        base = os.path.join(
-            os.path.dirname(plot_scores_path),
-            os.path.splitext(os.path.basename(plot_scores_path))[0],
-        )
-        real_path = base + "_real.png"
-        synt_path = base + "_synthetic.png"
-        _client_models._plot_anomaly_score_distributions(scores_real, y_fraud, real_path)
-        _client_models._plot_anomaly_score_distributions(scores_synt, y_synt, synt_path)
-        print(f"Anomaly score distributions saved to {real_path}")
-        print(f"Anomaly score distributions saved to {synt_path}")
-
-    return results_real, results_synt, waiter_month_data, synthetic
-
-
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Waiter–month anomaly detection: IF, OCSVM, LOF")
-    parser.add_argument("--synthetic", action="store_true", help="Compare real vs synthetic (default: real only)")
     parser.add_argument("--min-trn", type=int, default=8, help="num_of_trn lower bound (inclusive)")
-    parser.add_argument("--n-synthetic", type=int, default=6000, help="Synthetic fraud samples (with --synthetic)")
     parser.add_argument("--plot", type=str, default=None, help="Path to save score distribution plot")
     parser.add_argument(
         "--scores-csv",
@@ -438,18 +312,10 @@ if __name__ == "__main__":
     default_plot = os.path.join(_project_root, "waiter_month_anomaly_score_distributions.png")
     default_scores_csv = os.path.join(_project_root, "waiter_month_anomaly_scores.csv")
     scores_csv = args.scores_csv if args.scores_csv is not None else default_scores_csv
-    if args.synthetic:
-        compare_waiter_month_real_vs_synthetic(
-            min_num_of_trn=args.min_trn,
-            n_synthetic=args.n_synthetic,
-            plot_scores_path=args.plot or default_plot,
-            place_num_of_waiters=args.place_num_of_waiters,
-        )
-    else:
-        compare_waiter_month_models(
-            min_num_of_trn=args.min_trn,
-            exclude_fraud_from_training=True,
-            plot_scores_path=args.plot or default_plot,
-            scores_csv_path=scores_csv,
-            place_num_of_waiters=args.place_num_of_waiters,
-        )
+    compare_waiter_month_models(
+        min_num_of_trn=args.min_trn,
+        exclude_fraud_from_training=True,
+        plot_scores_path=args.plot or default_plot,
+        scores_csv_path=scores_csv,
+        place_num_of_waiters=args.place_num_of_waiters,
+    )
