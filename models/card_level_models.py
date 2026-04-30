@@ -18,7 +18,7 @@ if _project_root not in sys.path:
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from config import load_data_with_graph_features
+from config import load_data
 
 import importlib.util
 _spec = importlib.util.spec_from_file_location("scaling", os.path.join(_script_dir, "scaling.py"))
@@ -28,16 +28,19 @@ scale_features = _scaling.scale_features
 
 from fit_and_evaluate import fit_and_evaluate, fit_and_evaluate_per_model
 
-# Card-level features (copied from config.FEATURES to keep this module self-contained).
-CARD_LEVEL_FEATURES = [
+CARD_LEVEL_FEATURES_ISO = [
     "share_top_waiter",
     "gross_amount_mean_prcnt",
     "num_of_trn_prcnt",
     "first_last_trn_diff_prcnt",
 ]
-CARD_LEVEL_FEATURES_ISO = list(CARD_LEVEL_FEATURES)
-CARD_LEVEL_FEATURES_OCSVM = list(CARD_LEVEL_FEATURES)
-CARD_LEVEL_FEATURES_LOF = list(CARD_LEVEL_FEATURES)
+CARD_LEVEL_FEATURES_OCSVM = [
+    "share_top_waiter",
+    "gross_amount_mean_prcnt",
+    "num_of_trn_prcnt",
+    "first_last_trn_diff_prcnt"
+]
+CARD_LEVEL_FEATURES_LOF = list(CARD_LEVEL_FEATURES_ISO)
 
 CARD_LEVEL_FEATURES_BY_MODEL: Dict[str, list] = {
     "iso": list(CARD_LEVEL_FEATURES_ISO),
@@ -174,8 +177,8 @@ def compare_models(
     n_neighbors: int = 5,
     n_estimators: int = 200,
 ):
-    _, card_data = load_data_with_graph_features(activity_state=activity_state, days_visits=days_visits)
-    y_fraud = card_data["is_fraud"].astype(int).values
+    _, card_data, _, _, _ = load_data(activity_state=activity_state, days_visits=days_visits)
+    y_fraud = card_data['is_fraud'].astype(int).values
     n_fraud = int(y_fraud.sum())
     n_total = len(card_data)
     resolved = _resolve_features_by_model(features_by_model, card_features)

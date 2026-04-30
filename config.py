@@ -9,40 +9,6 @@ FEATURES = [
 ]
 
 
-FEATURES_FOR_PERCENTILE = [
-    'num_of_trn',
-    'days_visits',
-    'gross_amount_mean',
-    'gross_amount_sum',
-    'bonuses_accum_sum',
-    'bonuses_used_sum',
-    'num_of_waiters',
-    'gross_amount_max',
-    'first_last_trn_diff',
-    'first_second_trn_diff',
-    'first_third_trn_diff',
-    'time_between_trn_median',
-    'trn_per_day',
-    'num_of_places'
-]
-
-PERCENTILE_FEATURES = [
-    'num_of_trn_prcnt',
-    'days_visits_prcnt',
-    'gross_amount_mean_prcnt',
-    'gross_amount_sum_prcnt',
-    'bonuses_accum_sum_prcnt',
-    'bonuses_used_sum_prcnt',
-    'num_of_waiters_prcnt',
-    'gross_amount_max_prcnt',
-    'first_last_trn_diff_prcnt',
-    'first_second_trn_diff_prcnt',
-    'first_third_trn_diff_prcnt',
-    'time_between_trn_median_prcnt',
-    'trn_per_day_prcnt',
-    'num_of_places_prcnt'
-]
-
 def load_data(
     activity_state = 1, 
     days_visits = 1,
@@ -58,9 +24,6 @@ def load_data(
     client_data['is_fraud'] = client_data['person_id'].isin(FRAUD_IDS)
     client_data = client_data.set_index('person_id')
 
-    for feat, prcnt_feat in zip(FEATURES_FOR_PERCENTILE, PERCENTILE_FEATURES):
-        client_data[prcnt_feat] = client_data[feat].rank(pct=True)
-    
     waiter_week_data = pd.read_parquet(DATA_PATH + "waiter_week_features.parquet", engine="pyarrow")
     waiter_week_data = waiter_week_data[waiter_week_data['num_of_trn'] > num_of_trn]
     waiter_week_data = waiter_week_data[waiter_week_data['place_num_of_waiters'] > place_num_of_waiters]
@@ -82,26 +45,3 @@ def load_data(
 
 
     return df, client_data, waiter_week_data, waiter_month_data, waiter_level_data
-
-
-def load_data_with_graph_features(
-    activity_state = 1, 
-    days_visits = 1,
-    num_of_trn = 1,
-    place_num_of_waiters = 1,
-    total_num_of_trn = 8,
-    min_working_days = 2,
-    num_of_trn_month = 10):
-    df = pd.read_parquet(DATA_PATH + "processed_transactions.parquet", engine="pyarrow")
-    # client_data = pd.read_parquet(DATA_PATH + "client_level_features.parquet", engine="pyarrow")
-    # client_data = client_data[client_data['num_of_trn'] > activity_state]
-    # client_data = client_data[client_data['days_visits'] > days_visits]
-    # client_data['is_fraud'] = client_data['person_id'].isin(FRAUD_IDS)
-    # client_data = client_data.set_index('person_id')
-
-    graph_data = pd.read_parquet(DATA_PATH + "client_level_graph_features.parquet", engine="pyarrow")
-    graph_data = graph_data[graph_data['num_of_trn'] > activity_state]
-    graph_data = graph_data[graph_data['days_visits'] > days_visits]
-    # graph_data = graph_data.set_index('person_id')
-
-    return df, graph_data

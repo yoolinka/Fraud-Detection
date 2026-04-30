@@ -35,7 +35,6 @@ def _use_log1p_for_skew(
     nf_mask: np.ndarray,
     skew_abs_threshold: float,
 ) -> bool:
-    """Same rule as `waiter_week_use_log1p` in features_selection / gini notebooks."""
     if col == "is_fraud" or col not in df.columns:
         return False
     if _column_values_in_unit_interval(df[col]):
